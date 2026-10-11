@@ -51,6 +51,9 @@ pkg_name() {
 	debian:pip3 | ubuntu:pip3 | centos:pip3 | fedora:pip3) echo "python3-pip" ;;
 	arch:pip3) echo "python-pip" ;;
 	opensuse:pip3) echo "python3-pip" ;;
+	# CentOS Stream 10 splits npm into nodejs-npm; the bare name matches
+	# nothing (dnf ≥4.20 "info npm" → no match, rc 0).
+	centos:npm) echo "nodejs-npm" ;;
 	# ── compositor tooling (monkey-sway / monkey-hyprland) ──
 	*:swaymsg | *:swaynag) echo "sway" ;;
 	*:wl-copy) echo "wl-clipboard" ;;
@@ -246,7 +249,11 @@ repo_pkg_version() {
 	debian | ubuntu) ver=$(apt-cache policy "$1" 2>/dev/null | awk '/Candidate:/{print $2}') ;;
 	arch) ver=$(LC_ALL=C pacman -Si "$1" 2>/dev/null | awk '/^Version[[:space:]]*:/ {print $3; exit}') ;;
 	opensuse) ver=$(LC_ALL=C zypper --non-interactive info "$1" 2>/dev/null | awk -F': *' '/^Version/{print $2; exit}') ;;
-	centos | fedora) ver=$(dnf -q list available "$1" 2>/dev/null | awk 'NR>1 {print $2; exit}') ;;
+	# repoquery reads the REPO metadata only (installed state irrelevant,
+	# which is why `dnf list available` was wrong: it omits installed
+	# packages), and %{VERSION} carries no epoch prefix (`dnf list` shows
+	# "1:22.23.2-1.el10", which breaks the X.Y normalization below).
+	centos | fedora) ver=$(dnf -q repoquery --latest-limit=1 --qf '%{VERSION}' "$1" 2>/dev/null | head -1) ;;
 	esac
 	printf '%s' "$ver" | grep -oE '^[0-9]+\.[0-9]+' || true
 }
@@ -795,15 +802,22 @@ brew_install_retry() {
 	local t="$1" desc="$2"
 	shift 2
 	local brc=0
-	# HOMEBREW_NO_INTERACTIVE: brew must never prompt (broken-install
-	# removal, stdin-reading formula hooks, ...). Under retry→timeout the
-	# child sits in a NON-foreground process group — a prompt there is
-	# frozen by SIGTTIN with input unreachable (observed on Ubuntu:
-	# checkhealth --install hung at brew install zig's [y/n], ^C/D dead).
-	# With the flag brew fails fast instead; retry then re-attempts and the
-	# failure stays visible. The Homebrew INSTALLER already runs with
-	# NONINTERACTIVE=1 (install_linuxbrew) — this covers the runtime side.
-	retry -t "$t" -s "$desc" env HOMEBREW_NO_INTERACTIVE=1 brew install "$@" || brc=$?
+	# Brew can stall two different ways under retry→timeout, whose child
+	# sits in a NON-foreground process group — ANY prompt there is frozen
+	# by SIGTTIN with input unreachable (^C only reaches the foreground
+	# group). Both flags make brew fail fast instead of prompting:
+	#   HOMEBREW_NO_INTERACTIVE — stdin-reading formula hooks and the like
+	#     (observed on Ubuntu: checkhealth --install hung at brew install
+	#     zig's [y/n], ^C/D dead).
+	#   HOMEBREW_NO_ASK — brew ≥7 asks "Do you want to proceed with the
+	#     installation? [y/n]" whenever the plan includes dependencies and
+	#     gates that prompt on the TTY ONLY: the INTERACTIVE flag does NOT
+	#     suppress it (observed on CentOS: checkhealth --install froze at
+	#     brew install wget2's dependency prompt). Maps to `brew install
+	#     --no-ask`.
+	# The Homebrew INSTALLER already runs with NONINTERACTIVE=1
+	# (install_linuxbrew) — this covers the runtime side.
+	retry -t "$t" -s "$desc" env HOMEBREW_NO_INTERACTIVE=1 HOMEBREW_NO_ASK=1 brew install "$@" || brc=$?
 	[ "$brc" -eq 124 ] && cleanup_timed_out_brew
 	return "$brc"
 }
@@ -938,6 +952,11 @@ go_install() {
 # npm must be installed explicitly and verified afterwards.
 ensure_npm() {
 	if have_native_cmd npm && have_native_cmd node; then
+		# Brew's node (often a transitive formula dependency, e.g. mako
+		# dragging node into the Cellar on CentOS) is acceptable here: it
+		# satisfies npm tooling, and if a brew operation on that chain
+		# ever removes it, the NEXT ensure_npm call no longer early-returns
+		# and installs the distro nodejs instead — self-healing.
 		return 0
 	fi
 	info "installing npm..."
@@ -950,7 +969,7 @@ ensure_npm() {
 	fi
 	if ! have_native_cmd npm && have_native_cmd brew; then
 		# Last native source on distros whose index has no nodejs/npm.
-		retry -t 1800 -s "brew install node" brew install node || true
+		brew_install_retry 1800 "brew install node" node || true
 	fi
 	if have_native_cmd npm && have_native_cmd node; then
 		return 0
