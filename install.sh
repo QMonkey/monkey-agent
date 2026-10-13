@@ -22,7 +22,7 @@
 # fail() aborts: an installer must stop at the first fatal step.
 MONKEY_FAIL_EXITS=true
 
-EXTRA_LIBS="clone kmscon"
+EXTRA_LIBS="kmscon"
 . "$(dirname "${BASH_SOURCE[0]}")/lib/bootstrap.sh"
 
 # Data defaults — a project overwrites whatever it uses after sourcing.
