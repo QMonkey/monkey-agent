@@ -50,12 +50,12 @@ print_header() {
 # ────────────────────── platform ──────────────────────
 # Human-readable package manager for the Platform block.
 pkg_manager_name() {
-	case "${OS:-unknown}" in
-	debian | ubuntu) echo "apt" ;;
-	arch) echo "pacman" ;;
-	opensuse) echo "zypper" ;;
-	centos | fedora) echo "dnf" ;;
-	macos) echo "homebrew" ;;
+	case "$(pkg_manager)" in
+	apt) echo "apt" ;;
+	pacman) echo "pacman" ;;
+	zypper) echo "zypper" ;;
+	dnf) echo "dnf" ;;
+	brew) echo "homebrew" ;;
 	*) echo "" ;;
 	esac
 }
