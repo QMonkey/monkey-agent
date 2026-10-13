@@ -129,14 +129,22 @@ filter_pkgs() {
 	done
 }
 
+# The usual pairing: classify through <probe>, then report the dropped names.
+filter_pkgs_warn() {
+	filter_pkgs "$@"
+	warn_unknown_pkgs
+}
+
 warn_unknown_pkgs() {
 	local p
-	local -A seen=()
+	# Pattern-match dedupe, not `local -A`: macOS still ships bash 3.2 (same
+	# reason pkg_name is a case function).
+	local -a reported=()
 	for p in ${UNKNOWN_PKGS[@]+"${UNKNOWN_PKGS[@]}"}; do
 		# The same unmapped name arrives once per batch (required AND
 		# recommended both referenced wlogout) — report it once.
-		[ -z "${seen[$p]:-}" ] || continue
-		seen[$p]=1
+		case " ${reported[*]-} " in *" $p "*) continue ;; esac
+		reported+=("$p")
 		warn "$p not found in the package index — skipped (one bad name would fail the whole batch)"
 	done
 }
@@ -151,15 +159,15 @@ refresh_pkg() {
 	[ "$PKG_DB_REFRESHED" -eq 1 ] && return 0
 	PKG_DB_REFRESHED=1
 	case "$OS" in
-	debian | ubuntu) retry -t 1800 -s "apt-get update" sudo_cmd apt-get update ;;
+	debian | ubuntu) retry -t "$RETRY_T_NET" -s "apt-get update" sudo_cmd apt-get update ;;
 	arch)
 		clear_stale_pacman_lock
 		local rc=0
-		retry -t 1800 -s "pacman -Sy" sudo_cmd pacman -Sy || rc=$?
+		retry -t "$RETRY_T_NET" -s "pacman -Sy" sudo_cmd pacman -Sy || rc=$?
 		[ "$rc" -eq 124 ] && cleanup_timed_out_pacman
 		;;
-	opensuse) retry -t 1800 -s "zypper refresh" sudo_cmd zypper --non-interactive refresh ;;
-	centos | fedora) retry -t 1800 -s "dnf makecache" sudo_cmd dnf makecache -q ;;
+	opensuse) retry -t "$RETRY_T_NET" -s "zypper refresh" sudo_cmd zypper --non-interactive refresh ;;
+	centos | fedora) retry -t "$RETRY_T_NET" -s "dnf makecache" sudo_cmd dnf makecache -q ;;
 	esac
 	# A failed refresh is never fatal — the install step still runs (dnf
 	# refreshes expired metadata on demand anyway, brew auto-updates).
@@ -264,15 +272,14 @@ repo_pkg_version() {
 # probe, or the manager fails.
 install_sys_pkg() {
 	refresh_pkg
-	filter_pkgs probe_pkg_name "$@"
 	# Names the official index does not know may still live in the AUR
 	# (wlogout was dropped from [extra]) — set them aside for the AUR pass
 	# below instead of losing them to the unknown-name warning.
+	filter_pkgs_warn probe_pkg_name "$@"
 	local -a aur_pkgs=()
 	if [ "$OS" = arch ] && ((${#UNKNOWN_PKGS[@]} > 0)); then
 		aur_pkgs=(${UNKNOWN_PKGS[@]+"${UNKNOWN_PKGS[@]}"})
 	fi
-	warn_unknown_pkgs
 	if [ ${#PKG_VALID[@]} -eq 0 ]; then
 		# arch-only: an all-unknown batch still gets its AUR chance.
 		if [ "$OS" = arch ]; then
@@ -297,25 +304,25 @@ install_sys_pkg() {
 		# with input unreachable (observed on Ubuntu, same class as the old
 		# in-retry sudo -v password freeze). `sudo_cmd env` keeps the
 		# variables intact through sudo's env_reset.
-		retry -t 1800 -s "apt-get install" sudo_cmd env DEBIAN_FRONTEND=noninteractive DEBIAN_PRIORITY=critical NEEDRESTART_MODE=a apt-get install -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold ${PKG_VALID[@]+"${PKG_VALID[@]}"}
+		retry -t "$RETRY_T_NET" -s "apt-get install" sudo_cmd env DEBIAN_FRONTEND=noninteractive DEBIAN_PRIORITY=critical NEEDRESTART_MODE=a apt-get install -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold ${PKG_VALID[@]+"${PKG_VALID[@]}"}
 		;;
 	arch)
 		clear_stale_pacman_lock
 		local rc=0
-		retry -t 1800 -s "pacman install" sudo_cmd pacman -S --noconfirm ${PKG_VALID[@]+"${PKG_VALID[@]}"} || rc=$?
+		retry -t "$RETRY_T_NET" -s "pacman install" sudo_cmd pacman -S --noconfirm ${PKG_VALID[@]+"${PKG_VALID[@]}"} || rc=$?
 		[ "$rc" -eq 124 ] && cleanup_timed_out_pacman
 		# The official batch landed (or not) — the dropped names still get
 		# their AUR pass; its failure does not undo the pacman result.
 		((${#aur_pkgs[@]} > 0)) && install_aur_pkgs ${aur_pkgs[@]+"${aur_pkgs[@]}"}
 		return "$rc"
 		;;
-	opensuse) retry -t 1800 -s "zypper install" sudo_cmd zypper --non-interactive install -y ${PKG_VALID[@]+"${PKG_VALID[@]}"} ;;
+	opensuse) retry -t "$RETRY_T_NET" -s "zypper install" sudo_cmd zypper --non-interactive install -y ${PKG_VALID[@]+"${PKG_VALID[@]}"} ;;
 	centos)
 		# Some tools (universal-ctags, global, fzf, bat, pygments) come from EPEL.
 		sudo_cmd dnf install -y epel-release || true
 		local -a _args=(${PKG_VALID[@]+"${PKG_VALID[@]}"})
 		[[ " ${_args[*]} " =~ " global " ]] && _args+=(global-ctags)
-		retry -t 1800 -s "dnf install" sudo_cmd dnf install -y "${_args[@]}"
+		retry -t "$RETRY_T_NET" -s "dnf install" sudo_cmd dnf install -y "${_args[@]}"
 		;;
 	fedora)
 		# No EPEL on Fedora — the names below ship in the base repos.
@@ -323,7 +330,7 @@ install_sys_pkg() {
 		# same as CentOS; without it gtags is unusable.
 		local -a _args=(${PKG_VALID[@]+"${PKG_VALID[@]}"})
 		[[ " ${_args[*]} " =~ " global " ]] && _args+=(global-ctags)
-		retry -t 1800 -s "dnf install" sudo_cmd dnf install -y "${_args[@]}"
+		retry -t "$RETRY_T_NET" -s "dnf install" sudo_cmd dnf install -y "${_args[@]}"
 		;;
 	macos) return 1 ;; # Homebrew owns macOS — install_pkg routes there
 	*) return 1 ;;
@@ -395,12 +402,11 @@ install_pkg() {
 					for b in "${rest[@]}"; do bpkg+=("$(pkg_name "$b" brew)"); done
 				fi
 				if [ "$fallback_allowed" -eq 1 ]; then
-					filter_pkgs probe_brew_name "${bpkg[@]}"
-					warn_unknown_pkgs
+					filter_pkgs_warn probe_brew_name "${bpkg[@]}"
 					# All names filtered: the arithmetic test fails and _rc
 					# records it — same as an actual failed brew call.
 					if ((${#PKG_VALID[@]} > 0)); then
-						brew_install_retry 1800 "brew install (fallback)" ${PKG_VALID[@]+"${PKG_VALID[@]}"}
+						brew_install_retry "$RETRY_T_NET" "brew install (fallback)" ${PKG_VALID[@]+"${PKG_VALID[@]}"}
 					else
 						false
 					fi
@@ -413,13 +419,12 @@ install_pkg() {
 		} || _rc=1
 	fi
 	if ((${#brew_pkgs[@]} > 0)); then
-		filter_pkgs probe_brew_name "${brew_pkgs[@]}"
-		warn_unknown_pkgs
+		filter_pkgs_warn probe_brew_name "${brew_pkgs[@]}"
 		if ((${#PKG_VALID[@]} > 0)); then
 			local brc=0
 			# The BREW_FIRST batch can carry heavy formulae (zig pulls
-			# llvm@22 + lld@22) — 7200 gives those downloads room.
-			brew_install_retry 7200 "brew install" ${PKG_VALID[@]+"${PKG_VALID[@]}"} || brc=$?
+			# llvm@22 + lld@22) — RETRY_T_HUGE gives those downloads room.
+			brew_install_retry "$RETRY_T_HUGE" "brew install" ${PKG_VALID[@]+"${PKG_VALID[@]}"} || brc=$?
 			# A timed-out brew (rc 124) may still have COMPLETED the install
 			# (the timeout kills the wrapper after the binaries land):
 			# blindly falling back to the system package would install a
@@ -460,6 +465,9 @@ install_pkg() {
 # <args> is its package argument. Returns non-zero when the step failed.
 # The integration point over every package manager's installer in this
 # file — callers hand in a step, not a manager choice.
+# KEEP IN SYNC with lib/output.sh _strategy_hint: the two case tables walk
+# the SAME set of kinds — one executes a step, that one renders the human-
+# readable command. A new kind needs a row in BOTH.
 install_strategy_step() {
 	local kind="$1" args="$2"
 	case "$kind" in
@@ -485,7 +493,7 @@ install_strategy_step() {
 		;;
 	cargo)
 		ensure_rust || return 1
-		retry -t 1800 -s "cargo install $args" cargo install $args
+		retry -t "$RETRY_T_NET" -s "cargo install $args" cargo install $args
 		;;
 	pip)
 		# ensure_pip first: the fallback dies with command-not-found when
@@ -493,16 +501,16 @@ install_strategy_step() {
 		# swallowed pip error is what made the Leap 16 pylsp failure
 		# undiagnosable.
 		ensure_pip || return 1
-		retry -t 1800 -s "pip3 install $args" sudo_cmd pip3 install $args ||
-			retry -t 1800 -s "pip3 install $args" pip3 install $args
+		retry -t "$RETRY_T_NET" -s "pip3 install $args" sudo_cmd pip3 install $args ||
+			retry -t "$RETRY_T_NET" -s "pip3 install $args" pip3 install $args
 		;;
 	brew)
 		have_native_cmd brew || return 1
 		# zig/zls pull LLVM and marksman pulls the .NET runtime as formula
 		# dependencies — installs that dwarf a normal bottle.
-		local bt=1800
+		local bt="$RETRY_T_NET"
 		case "$args" in
-		zig | zls | marksman) bt=7200 ;;
+		zig | zls | marksman) bt="$RETRY_T_HUGE" ;;
 		esac
 		brew_install_retry "$bt" "brew install $args" $args
 		;;
@@ -511,7 +519,7 @@ install_strategy_step() {
 		;;
 	rustup-component)
 		ensure_rust || return 1
-		retry -t 1800 -s "rustup component add $args" rustup component add $args
+		retry -t "$RETRY_T_NET" -s "rustup component add $args" rustup component add $args
 		;;
 	python-unversioned)
 		install_python_for_gtags
@@ -530,70 +538,71 @@ install_strategy_step() {
 # here; this table owns the per-distro names — same dispatch style as
 # pkg_name. Project-specific extras stay in the project.
 #
+# Group-outer / OS-inner dispatch: groups that map to the same packages on
+# every distro (vcs, cmake, ...) are written once; only the divergent cells
+# (toolchain, versioned -devel names, arch's base-devel) get an OS branch.
+#
 # Usage: install_build_deps toolchain vcs autotools libevent ncurses bison
 install_build_deps() {
+	case "$OS" in
+	debian | ubuntu | arch | opensuse | centos | fedora | macos) ;;
+	*)
+		warn "install_build_deps: unsupported OS '$OS' — skipped."
+		return 0
+		;;
+	esac
 	refresh_pkg
-	local -a names=() group
+	local -a names=()
+	local group
 	for group in "$@"; do
-		case "$OS" in
-		debian | ubuntu)
-			case "$group" in
-			toolchain) names+=(build-essential) ;;
-			vcs) names+=(git curl) ;;
-			autotools) names+=(autoconf automake pkg-config) ;;
-			libevent) names+=(libevent-dev) ;;
-			ncurses) names+=(libncurses-dev) ;;
-			bison | cmake | gettext) names+=("$group") ;;
-			*) warn "install_build_deps: unknown group '$group' — skipped." ;;
+		case "$group" in
+		toolchain)
+			case "$OS" in
+			debian | ubuntu) names+=(build-essential) ;;
+			arch) names+=(base-devel) ;;
+			opensuse) names+=(gcc make) ;;
+			centos | fedora) names+=(gcc gcc-c++ make) ;;
+			macos) ;; # Xcode CLT provides the toolchain
 			esac
 			;;
-		arch)
-			# base-devel is a meta-package covering toolchain/autotools/bison/
-			# gettext; --needed keeps re-installs away.
-			case "$group" in
-			toolchain | autotools | bison | gettext) names+=(base-devel) ;;
-			vcs) names+=(git curl) ;;
-			libevent) names+=(libevent) ;;
-			ncurses) names+=(ncurses) ;;
-			cmake) names+=(cmake) ;;
-			*) warn "install_build_deps: unknown group '$group' — skipped." ;;
+		vcs)
+			case "$OS" in
+			macos) names+=(git) ;; # curl ships with macOS
+			*) names+=(git curl) ;;
 			esac
 			;;
-		opensuse)
-			case "$group" in
-			toolchain) names+=(gcc make) ;;
-			vcs) names+=(git curl) ;;
-			autotools) names+=(autoconf automake pkg-config) ;;
-			libevent) names+=(libevent-devel) ;;
-			ncurses) names+=(ncurses-devel) ;;
-			bison | cmake | gettext) names+=("$group") ;;
-			*) warn "install_build_deps: unknown group '$group' — skipped." ;;
+		autotools)
+			case "$OS" in
+			arch) names+=(base-devel) ;;
+			centos | fedora) names+=(autoconf automake pkgconfig) ;;
+			*) names+=(autoconf automake pkg-config) ;;
 			esac
 			;;
-		centos | fedora)
-			case "$group" in
-			toolchain) names+=(gcc gcc-c++ make) ;;
-			vcs) names+=(git curl) ;;
-			autotools) names+=(autoconf automake pkgconfig) ;;
-			libevent) names+=(libevent-devel) ;;
-			ncurses) names+=(ncurses-devel) ;;
-			bison | cmake | gettext) names+=("$group") ;;
-			*) warn "install_build_deps: unknown group '$group' — skipped." ;;
+		libevent)
+			case "$OS" in
+			debian | ubuntu) names+=(libevent-dev) ;;
+			arch | macos) names+=(libevent) ;;
+			*) names+=(libevent-devel) ;;
 			esac
 			;;
-		macos)
-			# Xcode CLT provides the toolchain, curl ships with macOS.
-			case "$group" in
-			toolchain) ;;
-			vcs) names+=(git) ;;
-			autotools) names+=(autoconf automake pkg-config) ;;
-			libevent | ncurses | bison | cmake | gettext) names+=("$group") ;;
-			*) warn "install_build_deps: unknown group '$group' — skipped." ;;
+		ncurses)
+			case "$OS" in
+			debian | ubuntu) names+=(libncurses-dev) ;;
+			arch | macos) names+=(ncurses) ;;
+			*) names+=(ncurses-devel) ;;
 			esac
 			;;
+		bison | gettext)
+			# arch folds both into base-devel (a package GROUP — see the
+			# toolchain arm); everywhere else the group IS the package name.
+			case "$OS" in
+			arch) names+=(base-devel) ;;
+			*) names+=("$group") ;;
+			esac
+			;;
+		cmake) names+=(cmake) ;;
 		*)
-			warn "install_build_deps: unsupported OS '$OS' — skipped."
-			return 0
+			warn "install_build_deps: unknown group '$group' — skipped."
 			;;
 		esac
 	done
@@ -606,7 +615,7 @@ install_build_deps() {
 	names=("${unique[@]}")
 	((${#names[@]} > 0)) || return 0
 	if [ "$OS" = macos ]; then
-		brew_install_retry 1800 "brew install build deps" ${names[@]+"${names[@]}"}
+		brew_install_retry "$RETRY_T_NET" "brew install build deps" ${names[@]+"${names[@]}"}
 	else
 		install_sys_pkg ${names[@]+"${names[@]}"}
 	fi
@@ -670,7 +679,7 @@ _ensure_aur_variant() {
 	# checkout so the caller's cwd survives. Missing this cd made the build
 	# die with "PKGBUILD does not exist" on every run, leaving every
 	# AUR-only package (wlogout) unavailable.
-	(cd "$dir" && retry -t 1800 -s "AUR $pkg build" makepkg -si --noconfirm) || rc=$?
+	(cd "$dir" && retry -t "$RETRY_T_NET" -s "AUR $pkg build" makepkg -si --noconfirm) || rc=$?
 	rm -rf "$dir"
 	return "$rc"
 }
@@ -706,7 +715,7 @@ ensure_aur_helper() {
 	# cannot vouch for it, so install straight through pacman (--needed
 	# keeps it a no-op when the toolchain exists).
 	refresh_pkg
-	retry -t 1800 -s "pacman install base-devel git" sudo_cmd pacman -S --needed --noconfirm base-devel git || return 1
+	retry -t "$RETRY_T_NET" -s "pacman install base-devel git" sudo_cmd pacman -S --needed --noconfirm base-devel git || return 1
 	local rc=0
 	_ensure_aur_variant "$AUR_HELPER" || rc=$?
 	hash -r
@@ -737,11 +746,10 @@ install_aur_pkgs() {
 		warn "AUR helper unavailable — not installed: $*"
 		return 1
 	}
-	filter_pkgs probe_aur_name "$@"
-	warn_unknown_pkgs
+	filter_pkgs_warn probe_aur_name "$@"
 	((${#PKG_VALID[@]} > 0)) || return 1
 	local rc=0
-	retry -t 1800 -s "AUR install" "$AUR_HELPER" -S --needed --noconfirm ${PKG_VALID[@]+"${PKG_VALID[@]}"} || rc=$?
+	retry -t "$RETRY_T_NET" -s "AUR install" "$AUR_HELPER" -S --needed --noconfirm ${PKG_VALID[@]+"${PKG_VALID[@]}"} || rc=$?
 	hash -r
 	return "$rc"
 }
@@ -921,12 +929,12 @@ ensure_rust() {
 	fi
 	info "installing rustup..."
 	local rustup_init="/tmp/rustup_init.$$.sh"
-	if ! retry -t 1800 -s "rustup installer download" curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o "$rustup_init"; then
+	if ! retry -t "$RETRY_T_NET" -s "rustup installer download" curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o "$rustup_init"; then
 		rm -f "$rustup_init"
 		warn "rustup install failed — install it manually: https://rust-lang.org/tools/install/"
 		return 1
 	fi
-	if ! retry -t 3600 -s "rustup toolchain install" sh "$rustup_init" -y; then
+	if ! retry -t "$RETRY_T_HEAVY" -s "rustup toolchain install" sh "$rustup_init" -y; then
 		rm -f "$rustup_init"
 		warn "rustup install failed — install it manually: https://rust-lang.org/tools/install/"
 		return 1
@@ -942,7 +950,7 @@ ensure_rust() {
 # resumes instead of restarting.
 go_install() {
 	info "go install ${1%@*} (building, no output — may take a few minutes)"
-	retry -t 1800 -s "go install ${1%@*}" go install "$@"
+	retry -t "$RETRY_T_NET" -s "go install ${1%@*}" go install "$@"
 }
 
 # ──────────────────────────── npm ────────────────────────────
@@ -969,7 +977,7 @@ ensure_npm() {
 	fi
 	if ! have_native_cmd npm && have_native_cmd brew; then
 		# Last native source on distros whose index has no nodejs/npm.
-		brew_install_retry 1800 "brew install node" node || true
+		brew_install_retry "$RETRY_T_NET" "brew install node" node || true
 	fi
 	if have_native_cmd npm && have_native_cmd node; then
 		return 0
@@ -1021,7 +1029,7 @@ npm_install_g() {
 	fi
 	# Retried like every other network op (bounded by RETRY_ACTIVE_COUNT
 	# inside an outer retry).
-	retry -t 1800 -s "npm install -g $*" npm install -g ${flags[@]+"${flags[@]}"} "$@"
+	retry -t "$RETRY_T_NET" -s "npm install -g $*" npm install -g ${flags[@]+"${flags[@]}"} "$@"
 	# Freshly installed binaries may be shadowed by bash's command hash.
 	hash -r
 }
@@ -1056,7 +1064,7 @@ ensure_pip() {
 			# heals every such version skew at once.
 			if ! pip_ok; then
 				info "libexpat1 alone did not fix it — running a full system upgrade (this can take a while)..."
-				retry -t 3600 -s "zypper update (full)" sudo_cmd zypper update -y --auto-agree-with-licenses >/dev/null 2>&1 || true
+				retry -t "$RETRY_T_HEAVY" -s "zypper update (full)" sudo_cmd zypper update -y --auto-agree-with-licenses >/dev/null 2>&1 || true
 			fi
 		fi
 		if ! pip_ok; then
