@@ -75,6 +75,9 @@ print_platform() {
 
 # ──────────────────────── hints ────────────────────────
 # Human command for one strategy step ("" when unknown).
+# KEEP IN SYNC with lib/pkg.sh install_strategy_step: the two case tables
+# walk the SAME set of kinds — one executes a step, this one renders its
+# human-readable command. A new kind needs a row in BOTH.
 _strategy_hint() {
 	local kind="$1" args="$2" b
 	case "$kind" in
@@ -117,9 +120,8 @@ _strategy_hint() {
 # Default hint: join the hints of every strategy step with "# or:".
 # Projects may define their own `optional_hint` after sourcing this file.
 optional_hint() {
-	local bin="$1" spec strategy rest h out=""
-	spec=$(find_spec "$bin") || spec="$bin"
-	parse_spec "$spec"
+	local bin="$1" strategy rest h out=""
+	load_spec_for "$bin"
 	strategy="${SPEC_INSTALL:-pkg}"
 	rest="$strategy"
 	while _strategy_split "$rest"; do
