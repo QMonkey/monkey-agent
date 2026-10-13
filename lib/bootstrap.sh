@@ -5,7 +5,7 @@
 #
 # The entry point sets EXTRA_LIBS (whitespace-separated lib names)
 # BEFORE sourcing this file; those are appended after the common set:
-#   install.sh     EXTRA_LIBS="clone kmscon"
+#   install.sh     EXTRA_LIBS="kmscon"
 #   checkhealth.sh EXTRA_LIBS="checks missing clipboard"
 
 LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -16,7 +16,7 @@ if [ ! -f "$LIB_DIR/common.sh" ]; then
 	exit 1
 fi
 # shellcheck source=/dev/null
-for _lib in common retry sudo tty output pkg config env ${EXTRA_LIBS:-}; do
+for _lib in common retry sudo tty output clone pkg distro brew toolchain config env ${EXTRA_LIBS:-}; do
 	. "$LIB_DIR/$_lib.sh"
 done
 unset _lib EXTRA_LIBS
