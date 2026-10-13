@@ -53,6 +53,37 @@ install_step_after() { :; }
 # WSL build there).
 install_print_info() { :; }
 
+# Default argument pre-parser for installers offering --with-kmscon
+# [tty[,tty...]] (default tty2): consumes the flag BEFORE install_main sees
+# the args (it fills _INSTALL_ARGS; the caller runs `parse_install_args "$@"`
+# then `install_main "${_INSTALL_ARGS[@]}"`). Sets KMSCON_TTYS ("" = flag not
+# given) and KMSCON_DONE. Projects with extra flags override this and
+# delegate the leftover args themselves.
+parse_install_args() {
+	KMSCON_TTYS=""
+	KMSCON_DONE=""
+	local args=()
+	while [ $# -gt 0 ]; do
+		case "$1" in
+		--with-kmscon)
+			KMSCON_TTYS=tty2
+			if [ $# -gt 1 ]; then
+				case "$2" in
+				--*) ;; # next flag: keep the tty2 default
+				*)
+					KMSCON_TTYS=$2
+					shift
+					;;
+				esac
+			fi
+			;;
+		*) args+=("$1") ;;
+		esac
+		shift
+	done
+	_INSTALL_ARGS=("${args[@]+"${args[@]}"}")
+}
+
 run_checkhealth_step() {
 	case "${CHECKHEALTH_MODE:-run}" in
 	run)
