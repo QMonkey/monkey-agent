@@ -11,20 +11,24 @@ Nothing generic is duplicated per project.
 
 ## Layout
 
-| Path               | Contents                                                                                           |
-| ------------------ | -------------------------------------------------------------------------------------------------- |
-| `install.sh`       | Installer entry point — sourced by a project's `install.sh`, then `install_main`                   |
-| `checkhealth.sh`   | Dependency-check entry point — sourced, then `checkhealth_main`                                    |
-| `lib/bootstrap.sh` | Shared sourcing head of both entry points: lib-dir resolution, fail-fast check, framework sourcing |
-| `lib/common.sh`    | Colors, indented log lines (`[INFO]` / `[ OK ]`), `$HOME` guard, temp cleanup                      |
-| `lib/sudo.sh`      | Native-sudo detection, per-run NOPASSWD drop-in (no keepalive)                                     |
-| `lib/pkg.sh`       | OS / package-manager abstraction + Homebrew fallback (`BREW_FIRST`)                                |
-| `lib/config.sh`    | Symlink / dir / file checks (`SYMLINKS`, `CONFIG_LINKS`, `CONFIG_HINTS`, `ADVISORY_SECTIONS`)      |
-| `lib/env.sh`       | PATH seeding / persistence (`bin_dirs`, `export_path`), shell env files, autostart block           |
-| `lib/checks.sh`    | Spec parser, probes, section markers, install batching                                             |
-| `lib/clone.sh`     | Git clone helpers used by the clone step                                                           |
-| `lib/kmscon.sh`    | kmscon install & VT takeover (`ensure_kmscon tty2`, getty masking, launch-gui presence check)      |
-| `lib/output.sh`    | Terminal output helpers: banner, section headers, platform block, install hints                    |
+| Path               | Contents                                                                                                                              |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `install.sh`       | Installer entry point — sourced by a project's `install.sh`, then `install_main`                                                      |
+| `checkhealth.sh`   | Dependency-check entry point — sourced, then `checkhealth_main`                                                                       |
+| `lib/bootstrap.sh` | Shared sourcing head of both entry points: lib-dir resolution, fail-fast check, framework sourcing                                    |
+| `lib/common.sh`    | Colors, indented log lines (`[INFO]` / `[ OK ]`), `$HOME` guard, WSL/native-binary probes, version comparison                         |
+| `lib/retry.sh`     | Retry with exponential backoff + per-attempt timeout (`retry`, timeout tiers)                                                         |
+| `lib/tty.sh`       | TIOCSTI injection into the controlling terminal (`inject_tty`, interactive-reader guard)                                              |
+| `lib/sudo.sh`      | Native-sudo detection, per-run NOPASSWD drop-in (no keepalive)                                                                        |
+| `lib/pkg.sh`       | OS / package-manager abstraction + Homebrew fallback (`BREW_FIRST`), install strategies (`install_strategy`, `install_strategy_step`) |
+| `lib/config.sh`    | Symlink / dir / file checks (`SYMLINKS`, `CONFIG_LINKS`, `CONFIG_HINTS`, `ADVISORY_SECTIONS`)                                         |
+| `lib/env.sh`       | PATH seeding / persistence (`bin_dirs`, `export_path`), shell env files, autostart block, XDG_RUNTIME_DIR repair                      |
+| `lib/checks.sh`    | Spec model, probes, checkhealth display sections (run_required_checks & friends)                                                      |
+| `lib/missing.sh`   | Missing-dependency installer passes (`install_missing_*`, batch collection, re-probe)                                                 |
+| `lib/clipboard.sh` | Clipboard provider detection + install (`CHECK_CLIPBOARD=required\|warn\|display`)                                                    |
+| `lib/clone.sh`     | Git clone helpers used by the clone step                                                                                              |
+| `lib/kmscon.sh`    | kmscon install & VT takeover (`ensure_kmscon tty2`, getty masking, launch-gui presence check)                                         |
+| `lib/output.sh`    | Terminal output helpers: banner, section headers, platform block, install hints                                                       |
 
 Neither entry point is meant to be executed on its own.
 
