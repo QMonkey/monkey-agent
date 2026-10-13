@@ -43,7 +43,7 @@ repair_broken_clone() {
 # killed clone attempt leaves a .git-only partial dir behind — repaired
 # before returning.
 _clone_submodules() {
-	retry -t 1800 -s "git submodule update" git -C "$1" submodule update --init --recursive
+	retry -t "$RETRY_T_NET" -s "git submodule update" git -C "$1" submodule update --init --recursive
 }
 
 clone_repo() {
@@ -81,7 +81,7 @@ clone_repo() {
 	if [ "$submodules" = 1 ] && [ "$has_depth" = 0 ]; then
 		git_args+=(--depth=1)
 	fi
-	if retry -t 1800 -s "git clone ${dir##*/}" git clone ${git_args[@]+"${git_args[@]}"} "$url" "$dir"; then
+	if retry -t "$RETRY_T_NET" -s "git clone ${dir##*/}" git clone ${git_args[@]+"${git_args[@]}"} "$url" "$dir"; then
 		[ "$submodules" = 1 ] || return 0
 		_clone_submodules "$dir"
 		return
