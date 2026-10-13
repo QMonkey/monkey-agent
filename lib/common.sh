@@ -162,6 +162,13 @@ retry() {
 	return "$rc"
 }
 
+# Standard per-attempt timeouts (-t) used by every retried call across lib/.
+# A call that legitimately runs long picks the next tier up instead of a
+# bespoke number.
+RETRY_T_NET=1800   # ordinary network operations (downloads, git, installs)
+RETRY_T_HEAVY=3600 # long-but-finite operations (full system upgrade, rustup toolchain)
+RETRY_T_HUGE=7200  # installs that pull LLVM/.NET as formula dependencies (zig, zls, marksman)
+
 # ──────────────────────────── platform ────────────────────────────
 require_home() {
 	# Never let a missing HOME fail later under `set -u`.
@@ -298,23 +305,27 @@ ensure_xdg_runtime_dir() {
 	# duplicated/misplaced section can break the boot). Effective after
 	# `wsl.exe --shutdown`; tiers 1-2 repair the current boot.
 	if is_wsl && [ "$uid" -ne 0 ]; then
+		local msg_set msg_ok msg_warn
+		msg_set="WSL boots as root (no default user) — setting $user in $wslconf..."
+		msg_ok="WSL default user set to $user — effective after 'wsl.exe --shutdown'; the tiers below still repair the current boot."
+		msg_warn="could not update $wslconf — add '[user] default=$user' manually (see README 'Precautions' → WSL2)."
 		if sudo_cmd grep -Eq '^[[:space:]]*default[[:space:]]*=' "$wslconf" 2>/dev/null; then
 			: # a default user is already declared — respect the existing choice
 		elif sudo_cmd grep -q '^\[user\]' "$wslconf" 2>/dev/null; then
 			# Insert right after the [user] header — appending at EOF would
 			# land in the last section.
-			info "WSL boots as root (no default user) — setting $user in $wslconf..."
+			info "$msg_set"
 			if sudo_cmd sed -i "/^\[user\]/a default=${user}" "$wslconf"; then
-				ok "WSL default user set to $user — effective after 'wsl.exe --shutdown'; the tiers below still repair the current boot."
+				ok "$msg_ok"
 			else
-				warn "could not update $wslconf — add '[user] default=$user' manually (see README 'Precautions' → WSL2)."
+				warn "$msg_warn"
 			fi
 		else
-			info "WSL boots as root (no default user) — setting $user in $wslconf..."
+			info "$msg_set"
 			if printf '\n[user]\ndefault=%s\n' "$user" | sudo_cmd tee -a "$wslconf" >/dev/null; then
-				ok "WSL default user set to $user — effective after 'wsl.exe --shutdown'; the tiers below still repair the current boot."
+				ok "$msg_ok"
 			else
-				warn "could not update $wslconf — add '[user] default=$user' manually (see README 'Precautions' → WSL2)."
+				warn "$msg_warn"
 			fi
 		fi
 	fi
@@ -385,9 +396,10 @@ version_ge() {
 
 # First version-looking token of a binary's version output. Tries --version,
 # -V, -v (tmux only answers -V); the caller-supplied regex lets suffix
-# versions ("3.7b") survive — default is plain X.Y.
+# versions ("3.7b") survive — DEFAULT_VER_RE is plain X.Y.
+DEFAULT_VER_RE='[0-9]+\.[0-9]+'
 extract_version() {
-	local bin="$1" regex="${2:-[0-9]+\.[0-9]+}" flag ver="" out
+	local bin="$1" regex="${2:-$DEFAULT_VER_RE}" flag ver="" out
 	for flag in --version -V -v; do
 		out=$("$bin" "$flag" 2>/dev/null) || out=""
 		[ -n "$out" ] || continue
@@ -406,7 +418,7 @@ bin_at_least() {
 	local bin="$1" min="$2"
 	have_native_cmd "$bin" || return 1
 	local ver
-	ver=$(extract_version "$bin" "${3:-[0-9]+\.[0-9]+}")
+	ver=$(extract_version "$bin" "${3:-$DEFAULT_VER_RE}")
 	[ -n "$ver" ] || return 1
 	version_ge "$ver" "$min"
 }
