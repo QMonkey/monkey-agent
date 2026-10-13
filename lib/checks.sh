@@ -1,4 +1,4 @@
-# monkey-scripts/lib/checks.sh — dependency checks for checkhealth.sh.
+   67 install_missing_optional() { 
 #
 # Sourced by scripts/checkhealth.sh only.
 #
@@ -127,7 +127,7 @@ check_version_spec() {
 		record_missing "$mode" "$SPEC_INSTALL_ID"
 		return 1
 	fi
-	ver=$(extract_version "$SPEC_ID" "${SPEC_VER_RE:-[0-9]+\.[0-9]+}")
+	ver=$(extract_version "$SPEC_ID" "${SPEC_VER_RE:-$DEFAULT_VER_RE}")
 	if [ -z "$ver" ]; then
 		if [ -n "$SPEC_FALLBACK" ]; then
 			# E.g. Hyprland: binary present, version string unparsable — not fatal.
@@ -215,6 +215,16 @@ find_spec() {
 		fi
 	done
 	return 1
+}
+
+# parse_spec for an id: resolve through find_spec, fall back to the bare id
+# as its own spec. Sets the SPEC_* globals plus SPEC_RAW (the full spec
+# string — install_strategy takes a spec, not an id).
+load_spec_for() {
+	local spec
+	spec=$(find_spec "$1") || spec="$1"
+	parse_spec "$spec"
+	SPEC_RAW="$spec"
 }
 
 # ──────────────────────── install strategies ────────────────────────
@@ -414,25 +424,37 @@ check_terminal_caps() {
 }
 
 # ──────────────────────── clipboard ────────────────────────
+# First available clipboard provider, in tmux-yank's preference order
+# (wl-copy wins, then xclip, then xsel); empty when none. The ONE probe list
+# every clipboard consumer goes through.
+_clipboard_tool() {
+	local t
+	for t in wl-copy xclip xsel; do
+		if have_native_cmd "$t"; then
+			printf '%s' "$t"
+			return 0
+		fi
+	done
+	return 1
+}
+
 # What the current session needs: pbcopy/pbpaste (built in) on macOS,
-# wl-copy/wl-paste on Wayland, xclip or xsel on X11. Prints "ok",
-# "missing <package>" or "n/a" (no graphical session — SSH, console — where a
-# system clipboard cannot be reached anyway).
+# wl-copy/wl-paste on Wayland, xclip or xsel on X11. Prints the state:
+#   "ok" | "ok <tool>" (which provider matched) | "missing <package>" | "n/a"
+# (no graphical session — SSH, console — where a system clipboard cannot be
+# reached anyway). Shared by the warn-level check and the installer pass.
 clipboard_state() {
 	if [ "$OS" = "macos" ]; then
 		echo ok
 	elif [ "${XDG_SESSION_TYPE:-}" = wayland ] || [ -n "${WAYLAND_DISPLAY:-}" ]; then
 		if have_native_cmd wl-copy; then
-			echo ok
+			echo "ok wl-copy"
 		else
 			echo "missing wl-clipboard"
 		fi
 	elif [ "${XDG_SESSION_TYPE:-}" = x11 ] || [ -n "${DISPLAY:-}" ]; then
-		if have_native_cmd xclip || have_native_cmd xsel; then
-			echo ok
-		else
-			echo "missing xclip"
-		fi
+		local tool
+		tool=$(_clipboard_tool) && echo "ok ${tool}" || echo "missing xclip"
 	else
 		echo n/a
 	fi
@@ -460,21 +482,15 @@ check_clipboard_required() {
 			record_missing required "clip.exe"
 		fi
 	else
-		# tmux-yank prefers wl-copy on Wayland (its helpers check wl-copy
-		# BEFORE xsel); under XWayland xclip works too, so any one of the
-		# three suffices.
-		local tool="" t hint="xclip"
-		for t in wl-copy xclip xsel; do
-			if have_native_cmd "$t"; then
-				tool="$t"
-				break
-			fi
-		done
+		# No session gate here (unlike clipboard_state): under XWayland
+		# xclip works too, so ANY of the three providers suffices.
+		local tool hint="xclip"
+		tool=$(_clipboard_tool) || true
 		[ -n "${WAYLAND_DISPLAY:-}" ] && hint="wl-clipboard"
 		if [ -n "$tool" ]; then
 			ok "${tool} (clipboard)"
 		else
-			fail "xclip / xsel / wl-copy (Wayland: install wl-clipboard)"
+			fail "xclip / xsel / wl-copy (install: ${hint})"
 			record_missing required "$hint"
 		fi
 	fi
@@ -486,7 +502,7 @@ check_clipboard_warn() {
 	local cb_state cb_pkg
 	cb_state=$(clipboard_state)
 	case "$cb_state" in
-	ok) ok "Clipboard support available" ;;
+	ok*) ok "Clipboard support available" ;;
 	n/a) warn "No display server — clipboard may be unavailable" ;;
 	missing*)
 		cb_pkg="${cb_state#missing }"
@@ -511,7 +527,7 @@ install_clipboard() {
 	local state pkg
 	state=$(clipboard_state)
 	case "$state" in
-	ok | n/a) return 0 ;;
+	ok* | n/a) return 0 ;;
 	missing*)
 		pkg="${state#missing }"
 		echo -e "  ${YELLOW}→ installing clipboard provider ${pkg}...${NC}"
@@ -528,14 +544,14 @@ install_clipboard() {
 
 # ──────────────────────── install missing ────────────────────────
 # Dedupe package names, order kept: two binaries can map to the SAME package
-# and the "Run:" hint would then repeat it.
+# and the "Run:" hint would then repeat it. Pattern match, not `local -A`:
+# macOS still ships bash 3.2 (same reason pkg_name is a case function).
 dedupe_pkgs() {
-	local -A seen=()
 	local -a out=()
 	local p
 	for p in "$@"; do
-		[ -z "${seen[$p]:-}" ] || continue
-		seen[$p]=1
+		[ -n "$p" ] || continue
+		case " ${out[*]-} " in *" $p "*) continue ;; esac
 		out+=("$p")
 	done
 	echo "${out[*]-}"
@@ -548,10 +564,9 @@ dedupe_pkgs() {
 _collect_pkg_batch() {
 	_PKG_BATCH_IDS=()
 	_PKG_BATCH_NAMES=()
-	local id spec
+	local id
 	for id in "$@"; do
-		spec=$(find_spec "$id") || spec="$id"
-		parse_spec "$spec"
+		load_spec_for "$id"
 		if [ "${SPEC_INSTALL:-pkg}" = "pkg" ]; then
 			_PKG_BATCH_IDS+=("$id")
 			_PKG_BATCH_NAMES+=("$(pkg_name "$id")")
@@ -559,84 +574,174 @@ _collect_pkg_batch() {
 	done
 }
 
+# ✓/✗ line for one install outcome; the hint names the human command
+# (usually a package name, sometimes a URL). Shared by every reporting site
+# of the installer passes below.
+report_install_ok() { echo -e "  ${GREEN}✓ $1 installed${NC}"; }
+report_install_fail() {
+	echo -e "  ${RED}✗ failed to install $1${NC}"
+	echo -e "    hint: $(get_install_hint "$2")"
+}
+
+# Default required re-probe: installed = resolves on PATH or a known ext path.
+_reprobe_default() {
+	have_native_cmd "$1" || ext_paths_ok "$1"
+}
+
+# Project-level re-probe (sway/hyprland upstream style): one "installed" /
+# "still missing" line per entry of REQUIRED_REPROBE_LIST, probed via
+# REQUIRED_REPROBE_FN (default _reprobe_default) and displayed via
+# REQUIRED_NAME_FN. Projects without the list keep the run_required_checks
+# behaviour (_required_tail_checks) instead.
+_required_reprobe() {
+	local rb probe_fn name_fn label
+	probe_fn=${REQUIRED_REPROBE_FN:-_reprobe_default}
+	name_fn=${REQUIRED_NAME_FN:-}
+	MISSING_REQUIRED=()
+	REQUIRED_FAILURES=0
+	for rb in ${REQUIRED_REPROBE_LIST[@]+"${REQUIRED_REPROBE_LIST[@]}"}; do
+		case "$rb" in
+		@*) continue ;;
+		*\|*)
+			# A full spec entry: probe and label through the spec itself —
+			# REQUIRED_REPROBE_LIST=("${REQUIRED_CHECKS[@]}") then needs no
+			# parallel name/availability tables.
+			parse_spec "$rb"
+			if probe_spec "$rb"; then
+				ok "$SPEC_DESC installed"
+			else
+				MISSING_REQUIRED+=("$SPEC_ID")
+				fail "$SPEC_DESC still missing"
+				REQUIRED_FAILURES=$((REQUIRED_FAILURES + 1))
+			fi
+			;;
+		*)
+			label="$rb"
+			if [ -n "$name_fn" ]; then label=$("$name_fn" "$rb"); fi
+			if "$probe_fn" "$rb"; then
+				ok "$label installed"
+			else
+				MISSING_REQUIRED+=("$rb")
+				fail "$label still missing"
+				REQUIRED_FAILURES=$((REQUIRED_FAILURES + 1))
+			fi
+			;;
+		esac
+	done
+	if [ ${#MISSING_REQUIRED[@]} -eq 0 ]; then
+		echo -e "${GREEN}All required tools now available.${NC}"
+	elif [ -n "${REQUIRED_MANUAL_HINT:-}" ]; then
+		echo -e "${RED}${REQUIRED_MANUAL_HINT}${NC}"
+	fi
+}
+
+# Post-install re-check when there is no reprobe list: rerun the required
+# checks and turn whatever is still missing into a "Run:" hint.
+_required_tail_checks() {
+	run_required_checks
+	if [ ${#MISSING_REQUIRED[@]} -eq 0 ]; then
+		echo -e "${GREEN}All required tools now available.${NC}"
+	else
+		local -a hint_pkgs=()
+		local id
+		for id in "${MISSING_REQUIRED[@]}"; do
+			hint_pkgs+=("$(pkg_name "$id")")
+		done
+		echo -e "${RED}Run: $(get_install_hint "$(dedupe_pkgs ${hint_pkgs[@]+"${hint_pkgs[@]}"})")${NC}"
+	fi
+}
+
+# One installer pass over a list of missing ids — the shared skeleton of the
+# required / recommended / optional steps. Plain "pkg" strategies batch into
+# ONE package-manager transaction; side-effecting strategies (npm/go/pip/
+# brew/…) install per tool. The mode only switches the reporting style:
+#   required    — batch failure tolerated (the reprobe/tail reports it)
+#   recommended — batch reports "Done." / "Failed. Run: ...", per-tool ✓/✗
+#   optional    — batch re-probes per binary; per-tool installs may delegate
+#                 to a project-defined install_optional_bin hook
+_install_missing_pass() {
+	local mode="$1" title="$2"
+	shift 2
+	local -a missing=("$@")
+	[ ${#missing[@]} -gt 0 ] || return 0
+	echo -e "${YELLOW}${title}: ${missing[*]}...${NC}"
+	_collect_pkg_batch "${missing[@]}"
+	local id
+	if [ ${#_PKG_BATCH_NAMES[@]} -gt 0 ]; then
+		case "$mode" in
+		required)
+			install_pkg ${_PKG_BATCH_NAMES[@]+"${_PKG_BATCH_NAMES[@]}"} || true
+			;;
+		recommended)
+			if install_pkg ${_PKG_BATCH_NAMES[@]+"${_PKG_BATCH_NAMES[@]}"}; then
+				echo -e "${GREEN}Done.${NC}"
+			else
+				echo -e "${RED}Failed. Run: $(get_install_hint "$(dedupe_pkgs ${_PKG_BATCH_NAMES[@]+"${_PKG_BATCH_NAMES[@]}"})")${NC}"
+			fi
+			;;
+		optional)
+			if install_pkg ${_PKG_BATCH_NAMES[@]+"${_PKG_BATCH_NAMES[@]}"}; then
+				for id in "${_PKG_BATCH_IDS[@]}"; do
+					load_spec_for "$id"
+					if probe_spec "$SPEC_RAW"; then
+						report_install_ok "$id"
+					else
+						report_install_fail "$id" "$id"
+					fi
+				done
+			else
+				for id in "${_PKG_BATCH_IDS[@]}"; do
+					report_install_fail "$id" "$id"
+				done
+			fi
+			;;
+		esac
+	fi
+	for id in "${missing[@]}"; do
+		load_spec_for "$id"
+		[ "${SPEC_INSTALL:-pkg}" = "pkg" ] && continue # batched above
+		case "$mode" in
+		required)
+			info "installing ${id}..."
+			install_strategy "$SPEC_RAW" || warn "could not install ${id}"
+			;;
+		recommended)
+			if install_strategy "$SPEC_RAW"; then
+				echo -e "  ${GREEN}✓ ${id} available${NC}"
+			else
+				report_install_fail "$id" "$(pkg_name "$id")"
+			fi
+			;;
+		optional)
+			echo -e "  ${YELLOW}→ installing ${id}...${NC}"
+			local installed_ok=true
+			# A project may carry upstream's per-binary install table verbatim
+			# (monkey-nvim / monkey-vim); otherwise run the spec strategy.
+			if declare -F install_optional_bin >/dev/null 2>&1; then
+				install_optional_bin "$id" || installed_ok=false
+			elif ! install_strategy "$SPEC_RAW"; then
+				installed_ok=false
+			fi
+			if $installed_ok; then
+				report_install_ok "$id"
+			else
+				report_install_fail "$id" "$id"
+			fi
+			;;
+		esac
+	done
+}
+
 install_missing_required() {
 	${INSTALL_MODE:-false} || return 0
 	[ ${#MISSING_REQUIRED[@]} -gt 0 ] || return 0
-	echo -e "${YELLOW}Installing: ${MISSING_REQUIRED[*]}...${NC}"
-	local id spec
-	_collect_pkg_batch "${MISSING_REQUIRED[@]}"
-	if [ ${#_PKG_BATCH_NAMES[@]} -gt 0 ]; then
-		install_pkg ${_PKG_BATCH_NAMES[@]+"${_PKG_BATCH_NAMES[@]}"} || true
-	fi
-	for id in "${MISSING_REQUIRED[@]}"; do
-		spec=$(find_spec "$id") || spec="$id"
-		parse_spec "$spec"
-		[ "${SPEC_INSTALL:-pkg}" = "pkg" ] && continue
-		info "installing ${id}..."
-		install_strategy "$spec" || warn "could not install ${id}"
-	done
-	# Project-level re-probe (sway/hyprland upstream style): one "installed" /
-	# "still missing" line per entry of REQUIRED_REPROBE_LIST, probed via
-	# REQUIRED_REPROBE_FN (default below) and displayed via REQUIRED_NAME_FN.
-	# Projects without the list keep the run_required_checks behaviour below.
+	_install_missing_pass required "Installing" ${MISSING_REQUIRED[@]+"${MISSING_REQUIRED[@]}"}
 	# [*] in the guard, never [@]: an UNSET array's @+ expansion is zero
 	# words, so `[ -n "${arr[@]+SET}" ]` degenerates to always-true `[ -n ]`.
 	if [ -n "${REQUIRED_REPROBE_LIST[*]+SET}" ] && [ ${#REQUIRED_REPROBE_LIST[*]} -gt 0 ]; then
-		local rb probe_fn name_fn label
-		probe_fn=${REQUIRED_REPROBE_FN:-_reprobe_default}
-		name_fn=${REQUIRED_NAME_FN:-}
-		MISSING_REQUIRED=()
-		REQUIRED_FAILURES=0
-
-		# Default re-probe: installed = resolves on PATH or a known ext path.
-		_reprobe_default() {
-			have_native_cmd "$1" || ext_paths_ok "$1"
-		}
-		for rb in ${REQUIRED_REPROBE_LIST[@]+"${REQUIRED_REPROBE_LIST[@]}"}; do
-			case "$rb" in
-			@*) continue ;;
-			*\|*)
-				# A full spec entry: probe and label through the spec itself —
-				# REQUIRED_REPROBE_LIST=("${REQUIRED_CHECKS[@]}") then needs no
-				# parallel name/availability tables.
-				parse_spec "$rb"
-				if probe_spec "$rb"; then
-					ok "$SPEC_DESC installed"
-				else
-					MISSING_REQUIRED+=("$SPEC_ID")
-					fail "$SPEC_DESC still missing"
-					REQUIRED_FAILURES=$((REQUIRED_FAILURES + 1))
-				fi
-				;;
-			*)
-				label="$rb"
-				if [ -n "$name_fn" ]; then label=$("$name_fn" "$rb"); fi
-				if "$probe_fn" "$rb"; then
-					ok "$label installed"
-				else
-					MISSING_REQUIRED+=("$rb")
-					fail "$label still missing"
-					REQUIRED_FAILURES=$((REQUIRED_FAILURES + 1))
-				fi
-				;;
-			esac
-		done
-		if [ ${#MISSING_REQUIRED[@]} -eq 0 ]; then
-			echo -e "${GREEN}All required tools now available.${NC}"
-		elif [ -n "${REQUIRED_MANUAL_HINT:-}" ]; then
-			echo -e "${RED}${REQUIRED_MANUAL_HINT}${NC}"
-		fi
+		_required_reprobe
 	else
-		run_required_checks
-		if [ ${#MISSING_REQUIRED[@]} -eq 0 ]; then
-			echo -e "${GREEN}All required tools now available.${NC}"
-		else
-			local -a hint_pkgs=()
-			for id in "${MISSING_REQUIRED[@]}"; do
-				hint_pkgs+=("$(pkg_name "$id")")
-			done
-			echo -e "${RED}Run: $(get_install_hint "$(dedupe_pkgs ${hint_pkgs[@]+"${hint_pkgs[@]}"})")${NC}"
-		fi
+		_required_tail_checks
 	fi
 	echo ""
 }
@@ -644,27 +749,7 @@ install_missing_required() {
 install_missing_recommended() {
 	${INSTALL_MODE:-false} || return 0
 	[ ${#MISSING_RECOMMENDED[@]} -gt 0 ] || return 0
-	echo -e "${YELLOW}Installing: ${MISSING_RECOMMENDED[*]}...${NC}"
-	local id spec
-	_collect_pkg_batch "${MISSING_RECOMMENDED[@]}"
-	if [ ${#_PKG_BATCH_NAMES[@]} -gt 0 ]; then
-		if install_pkg ${_PKG_BATCH_NAMES[@]+"${_PKG_BATCH_NAMES[@]}"}; then
-			echo -e "${GREEN}Done.${NC}"
-		else
-			echo -e "${RED}Failed. Run: $(get_install_hint "$(dedupe_pkgs ${_PKG_BATCH_NAMES[@]+"${_PKG_BATCH_NAMES[@]}"})")${NC}"
-		fi
-	fi
-	for id in "${MISSING_RECOMMENDED[@]}"; do
-		spec=$(find_spec "$id") || spec="$id"
-		parse_spec "$spec"
-		[ "${SPEC_INSTALL:-pkg}" = "pkg" ] && continue
-		if install_strategy "$spec"; then
-			echo -e "  ${GREEN}✓ ${id} available${NC}"
-		else
-			echo -e "  ${RED}✗ failed to install ${id}${NC}"
-			echo -e "    hint: $(get_install_hint "$(pkg_name "$id")")"
-		fi
-	done
+	_install_missing_pass recommended "Installing" ${MISSING_RECOMMENDED[@]+"${MISSING_RECOMMENDED[@]}"}
 	echo ""
 }
 
@@ -674,11 +759,10 @@ install_missing_optional() {
 	${INSTALL_MODE:-false} || return 0
 	[ "${INSTALL_OPTIONAL:-0}" = 1 ] || return 0
 	local -a missing=()
-	local e bin spec
+	local e
 	for e in ${OPTIONAL_CHECKS[@]+"${OPTIONAL_CHECKS[@]}"}; do
 		parse_spec "$e"
-		bin="$SPEC_ID"
-		probe_spec "$e" || missing+=("$bin")
+		probe_spec "$e" || missing+=("$SPEC_ID")
 	done
 	if [ ${#missing[@]} -eq 0 ]; then
 		if [ -n "${OPTIONAL_ALL_PRESENT_MSG:-}" ]; then
@@ -687,54 +771,9 @@ install_missing_optional() {
 		fi
 		return 0
 	fi
-	echo -e "${YELLOW}${OPTIONAL_INSTALL_TITLE:-Installing optional tools}: ${missing[*]}...${NC}"
-	# Plain pkg strategies batch into ONE transaction; side-effecting
-	# strategies (npm/go/pip/brew/…) install per tool below.
-	_collect_pkg_batch "${missing[@]}"
-	if [ ${#_PKG_BATCH_IDS[@]} -gt 0 ]; then
-		if install_pkg ${_PKG_BATCH_NAMES[@]+"${_PKG_BATCH_NAMES[@]}"}; then
-			local bin spec
-			for bin in "${_PKG_BATCH_IDS[@]}"; do
-				spec=$(find_spec "$bin") || spec="$bin"
-				if probe_spec "$spec"; then
-					echo -e "  ${GREEN}✓ ${bin} installed${NC}"
-				else
-					echo -e "  ${RED}✗ failed to install ${bin}${NC}"
-					echo -e "    hint: $(get_install_hint "$bin")"
-				fi
-			done
-		else
-			for bin in "${_PKG_BATCH_IDS[@]}"; do
-				echo -e "  ${RED}✗ failed to install ${bin}${NC}"
-				echo -e "    hint: $(get_install_hint "$bin")"
-			done
-		fi
-	fi
-	local installed_ok
-	for bin in "${missing[@]}"; do
-		spec=$(find_spec "$bin") || spec="$bin"
-		parse_spec "$spec"
-		[ "${SPEC_INSTALL:-pkg}" = "pkg" ] && continue # batched above
-		echo -e "  ${YELLOW}→ installing ${bin}...${NC}"
-		installed_ok=true
-		# A project may carry upstream's per-binary install table verbatim
-		# (monkey-nvim / monkey-vim); otherwise run the spec strategy.
-		if declare -F install_optional_bin >/dev/null 2>&1; then
-			install_optional_bin "$bin" || installed_ok=false
-		elif ! install_strategy "$spec"; then
-			installed_ok=false
-		fi
-		if $installed_ok; then
-			echo -e "  ${GREEN}✓ ${bin} installed${NC}"
-		else
-			echo -e "  ${RED}✗ failed to install ${bin}${NC}"
-			echo -e "    hint: $(get_install_hint "$bin")"
-		fi
-	done
+	_install_missing_pass optional "${OPTIONAL_INSTALL_TITLE:-Installing optional tools}" ${missing[@]+"${missing[@]}"}
 	# Optional trailing summary for projects whose original printed one
 	# after a non-empty install batch (monkey-nvim, monkey-vim).
-	if [ -n "${OPTIONAL_DONE_MSG:-}" ]; then
-		echo -e "${GREEN}${OPTIONAL_DONE_MSG}${NC}"
-	fi
+	[ -n "${OPTIONAL_DONE_MSG:-}" ] && echo -e "${GREEN}${OPTIONAL_DONE_MSG}${NC}"
 	echo ""
 }
