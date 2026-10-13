@@ -73,6 +73,25 @@ print_platform() {
 	echo ""
 }
 
+# Human install command for one or more package names — the "Run:" line and
+# the hint after a failed install. The manager id comes from pkg_manager()
+# (lib/pkg.sh); this is the rendering side, kept with the other hint helpers.
+get_install_hint() {
+	case "$(pkg_manager)" in
+	apt) echo "sudo apt-get install ${*}" ;;
+	pacman) echo "sudo pacman -S ${*}" ;;
+	zypper) echo "sudo zypper install ${*}" ;;
+	dnf) echo "sudo dnf install ${*}" ;;
+	brew) echo "brew install ${*}" ;;
+	*)
+		case "${OS:-unknown}" in
+		linux-unknown) echo "install ${*} manually or 'brew install ${*}'" ;;
+		*) echo "install ${*} manually" ;;
+		esac
+		;;
+	esac
+}
+
 # ──────────────────────── hints ────────────────────────
 # Human command for one strategy step ("" when unknown).
 # KEEP IN SYNC with lib/pkg.sh install_strategy_step: the two case tables
