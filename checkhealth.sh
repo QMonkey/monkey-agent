@@ -23,7 +23,7 @@ MONKEY_FAIL_EXITS=false
 INSTALL_MODE=false
 SKIP_CONFIG_CHECKS=false
 
-EXTRA_LIBS="checks"
+EXTRA_LIBS="checks missing clipboard"
 . "$(dirname "${BASH_SOURCE[0]}")/lib/bootstrap.sh"
 
 # Data defaults: every project overwrites the ones it uses right after
@@ -60,7 +60,7 @@ ENVIRONMENT
 
 Exit code: 1 if any required dependency is missing, 0 otherwise.
 EOF
-	exit 0
+	exit "${1:-0}"
 }
 
 parse_args() {
@@ -70,8 +70,9 @@ parse_args() {
 		--skip-check-config) SKIP_CONFIG_CHECKS=true ;;
 		-h | --help) usage ;;
 		*)
-			echo "Unknown option: $1"
-			usage
+			echo "Unknown option: $1" >&2
+			# Not 0: an unrecognized flag must not read as a passing check.
+			usage 2
 			;;
 		esac
 		shift
