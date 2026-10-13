@@ -24,6 +24,23 @@
 # still ships bash 3.2, which has no associative arrays.
 
 # ────────────────── system package managers ──────────────────
+# The ONE OS → package-manager mapping (apt | pacman | zypper | dnf | brew,
+# "" when nothing applies). Simple mappers (install hints, canary, display
+# name) dispatch through this; the install/probe/refresh paths keep their
+# explicit per-OS cases — their branches carry distro-specific behaviour
+# (apt env vars, the pacman lock, EPEL, zypper capabilities) that a flat id
+# cannot express.
+pkg_manager() {
+	case "${OS:-unknown}" in
+	debian | ubuntu) echo "apt" ;;
+	arch) echo "pacman" ;;
+	opensuse) echo "zypper" ;;
+	centos | fedora) echo "dnf" ;;
+	macos) echo "brew" ;;
+	*) echo "" ;;
+	esac
+}
+
 # Names that differ from the binary name for SOME package manager. The arms
 # below cover ONLY those (go→golang-go, node→nodejs, black→python3-black,
 # ...). A tool whose package name equals its command name (git, tmux,
@@ -342,9 +359,9 @@ install_sys_pkg() {
 # index is unreachable (network outage) and every "unknown" verdict is a
 # false negative. macOS: no system manager, no canary.
 _pkg_index_canary() {
-	case "$OS" in
-	debian | ubuntu) echo "dpkg" ;;
-	arch | opensuse | centos | fedora) echo "filesystem" ;;
+	case "$(pkg_manager)" in
+	apt) echo "dpkg" ;;
+	pacman | zypper | dnf) echo "filesystem" ;;
 	*) return 1 ;;
 	esac
 }
@@ -457,6 +474,45 @@ install_pkg() {
 	# install status.
 	hash -r
 	return "$_rc"
+}
+
+# Split one comma-separated strategy step off <rest> (e.g. "pkg,pip:x"):
+# sets _STRATEGY_KIND / _STRATEGY_ARGS / _STRATEGY_REST (what remains after
+# the step) and returns 1 when the list is exhausted. Shared by
+# install_strategy (execution) and optional_hint (hint derivation).
+_strategy_split() {
+	[ -n "$1" ] || return 1
+	local step="${1%%,*}"
+	_STRATEGY_KIND="${step%%:*}"
+	_STRATEGY_ARGS=""
+	[ "$step" != "$_STRATEGY_KIND" ] && _STRATEGY_ARGS="${step#*:}"
+	if [ "$1" = "$step" ]; then
+		_STRATEGY_REST=""
+	else
+		_STRATEGY_REST="${1#*,}"
+	fi
+}
+
+# Install everything a spec's strategy asks for, step by step, stopping as
+# soon as the dependency actually probes positive.
+install_strategy() {
+	local spec="$1" strategy rest
+	parse_spec "$spec"
+	strategy="$SPEC_INSTALL"
+	[ -n "$strategy" ] || strategy="pkg"
+	[ "$strategy" = "none" ] && return 1
+	rest="$strategy"
+	while _strategy_split "$rest"; do
+		rest="$_STRATEGY_REST"
+		install_strategy_step "$_STRATEGY_KIND" "$_STRATEGY_ARGS" || true
+		# The step may have just CREATED a bin dir (go/cargo install into
+		# GOPATH[0]/bin, CARGO_HOME/bin, npm prefix/bin) — re-seed so the
+		# probe below can actually resolve the freshly installed binary.
+		if probe_spec "$spec"; then
+			return 0
+		fi
+	done
+	return 1
 }
 
 # ──────────────────────── install strategies ────────────────────────
@@ -625,14 +681,18 @@ install_build_deps() {
 # Human install command for one or more package names — the "Run:" line and
 # the hint after a failed install.
 get_install_hint() {
-	case "$OS" in
-	debian | ubuntu) echo "sudo apt-get install ${*}" ;;
-	arch) echo "sudo pacman -S ${*}" ;;
-	opensuse) echo "sudo zypper install ${*}" ;;
-	centos | fedora) echo "sudo dnf install ${*}" ;;
-	macos) echo "brew install ${*}" ;;
-	linux-unknown) echo "install ${*} manually or 'brew install ${*}'" ;;
-	*) echo "install ${*} manually" ;;
+	case "$(pkg_manager)" in
+	apt) echo "sudo apt-get install ${*}" ;;
+	pacman) echo "sudo pacman -S ${*}" ;;
+	zypper) echo "sudo zypper install ${*}" ;;
+	dnf) echo "sudo dnf install ${*}" ;;
+	brew) echo "brew install ${*}" ;;
+	*)
+		case "${OS:-unknown}" in
+		linux-unknown) echo "install ${*} manually or 'brew install ${*}'" ;;
+		*) echo "install ${*} manually" ;;
+		esac
+		;;
 	esac
 }
 
