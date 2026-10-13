@@ -1,4 +1,4 @@
-   67 install_missing_optional() { 
+# monkey-scripts/lib/checks.sh — dependency checks for checkhealth.sh.
 #
 # Sourced by scripts/checkhealth.sh only.
 #
