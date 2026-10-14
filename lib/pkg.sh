@@ -246,18 +246,42 @@ install_strategy_step() {
 		# swallowed pip error is what made the Leap 16 pylsp failure
 		# undiagnosable.
 		ensure_pip || return 1
-		retry -t "$RETRY_T_NET" -s "pip3 install $args" sudo_cmd pip3 install $args ||
-			retry -t "$RETRY_T_NET" -s "pip3 install $args" pip3 install $args
+		# USER-SPACE install (~/.local/lib/python3.X) first: pip installs
+		# here are editor-grade user tools, and a sudo prompt inside this
+		# retried command would die of SIGTTIN (sudo_cmd fails the attempt).
+		# User site stays on this interpreter's sys.path (distro pylsp loads
+		# the plugin), is user-owned/removable, and matches the npm/cargo/go
+		# convention; console scripts land in ~/.local/bin (bin_dirs seeds
+		# it at the front of PATH). The sudo lane is the fallback.
+		#
+		# PEP 668: Fedora 38+ / Debian 12+ / Ubuntu 23.04+ / Tumbleweed mark
+		# the system python EXTERNALLY-MANAGED — pip refuses ALL installs
+		# into it, --user included. Old pips reject the flag itself, so add
+		# it only when this pip knows it AND the marker is present. venv/
+		# pipx are NOT options: pylsp loads plugins via entry points from
+		# ITS OWN interpreter, so isolation hides them; pipx-ing the whole
+		# pylsp stack would overturn the distro-package-first policy for
+		# one plugin gap.
+		local user_flags="--user" sys_flags=""
+		if pip3 install --help 2>/dev/null | grep -q -- --break-system-packages &&
+			[ -f "$(python3 -c 'import sysconfig; print(sysconfig.get_path("stdlib"))' 2>/dev/null)/EXTERNALLY-MANAGED" ]; then
+			user_flags="$user_flags --break-system-packages"
+			sys_flags="--break-system-packages"
+		fi
+		retry -t "$RETRY_T_NET" -s "pip3 install $args" pip3 install $user_flags $args ||
+			retry -t "$RETRY_T_NET" -s "pip3 install $args" sudo_cmd pip3 install $sys_flags $args
 		;;
 	brew)
 		have_native_cmd brew || return 1
-		# zig/zls pull LLVM and marksman pulls the .NET runtime as formula
-		# dependencies — installs that dwarf a normal bottle.
-		local bt="$RETRY_T_NET"
-		case "$args" in
-		zig | zls | marksman) bt="$RETRY_T_HUGE" ;;
-		esac
-		brew_install_retry "$bt" "brew install $args" $args
+		# Heavy-formula timeout floors (zig / zls / marksman) live inside
+		# brew_install_retry — uniform across every brew lane.
+		brew_install_retry "$RETRY_T_NET" "brew install $args" $args
+		;;
+	zig-zls-pair)
+		# Version-locked zig+zls pair (see install_zig_zls_pair in brew.sh)
+		# — heals the match:zig probe failure caused by brew's zls formula
+		# lagging its own zig formula.
+		install_zig_zls_pair
 		;;
 	rustup)
 		ensure_rust
