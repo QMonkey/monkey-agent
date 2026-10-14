@@ -92,6 +92,12 @@ pkg_name() {
 	opensuse:pygmentize) echo "python3-Pygments" ;; # capability: python313-Pygments provides it
 	centos:pygmentize | fedora:pygmentize) echo "python3-pygments" ;;
 	debian:pylsp | ubuntu:pylsp) echo "python3-pylsp" ;;
+	# python-lsp-black: pylsp's black plugin (no binary — py:module probe).
+	# Arch ships python-lsp-black under its own name; openSUSE prefixes the
+	# PyPI name verbatim (python3-<pypi>); Fedora: not packaged (probe
+	# drops it → the spec's pip fallback installs).
+	debian:python-lsp-black | ubuntu:python-lsp-black) echo "python3-pylsp-black" ;;
+	opensuse:python-lsp-black) echo "python3-python-lsp-black" ;;
 	arch:pylsp | macos:pylsp) echo "python-lsp-server" ;;
 	opensuse:pylsp) echo "python3-python-lsp-server" ;; # Leap has NO provider — probe fails → pip fallback (correct)
 	centos:pylsp | fedora:pylsp) echo "python3-lsp-server" ;;
