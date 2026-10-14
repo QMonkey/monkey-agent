@@ -153,12 +153,14 @@ version_ge() {
 }
 
 # First version-looking token of a binary's version output. Tries --version,
-# -V, -v (tmux only answers -V); the caller-supplied regex lets suffix
-# versions ("3.7b") survive — DEFAULT_VER_RE is plain X.Y.
+# -V, -v (tmux only answers -V) and finally the bare subcommand `version`
+# (zig and go have no --version); the caller-supplied regex lets suffix
+# versions ("3.7b") survive — DEFAULT_VER_RE is plain X.Y. A tool that takes
+# "version" as a positional instead just errors out (rc != 0 → skipped).
 DEFAULT_VER_RE='[0-9]+\.[0-9]+'
 extract_version() {
 	local bin="$1" regex="${2:-$DEFAULT_VER_RE}" flag ver="" out
-	for flag in --version -V -v; do
+	for flag in --version -V -v version; do
 		out=$("$bin" "$flag" 2>/dev/null) || out=""
 		[ -n "$out" ] || continue
 		ver=$(printf '%s\n' "$out" | grep -oE "$regex" | head -1)
