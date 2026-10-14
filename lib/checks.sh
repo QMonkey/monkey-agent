@@ -8,11 +8,15 @@
 #               for package-name lookups
 #     check     bin (default) | ext | anyof:a b c | anyofext:a b c |
 #               ver:MIN | ver:MIN!bad bad (versions that pass MIN but are
-#               known broken, exact match on the extracted version)
+#               known broken, exact match on the extracted version) |
+#               py:module (Python module probe — pylsp plugins ship no
+#               binary; import the module instead) |
+#               match:bin (companion whose major.minor version must equal
+#               <bin>'s — zls vs zig; master missing ⇒ pass)
 #     desc      printed text (default: id)
 #     install   pkg (default) | pkg:name,name | npm:x | go:x | cargo:x |
 #               pip:x | brew:x | rustup | rustup-component:x |
-#               python-unversioned | none
+#               python-unversioned | zig-zls-pair | none
 #     ver_regex version regex (default: [0-9]+\.[0-9]+)
 #     fallback  binary accepted instead of id (warn, not fail)
 #     token     version output must mention this (warn only)
@@ -88,8 +92,52 @@ probe_spec() {
 		return 0
 		;;
 	ver:*)
-		have_native_cmd "$SPEC_ID"
-		return
+		# Version detectability IS the probe (a rustup shim for an
+		# uninstalled component is present but answers nothing). Mirrors
+		# check_version_spec's one leniency: a declared fallback accepts an
+		# unparsable version (binary there, nothing more to say).
+		have_native_cmd "$SPEC_ID" || return 1
+		local ver
+		ver=$(extract_version "$SPEC_ID" "${SPEC_VER_RE:-$DEFAULT_VER_RE}")
+		if [ -z "$ver" ]; then
+			[ -n "$SPEC_FALLBACK" ] && return 0
+			return 1
+		fi
+		return 0
+		;;
+	py:*)
+		# pylsp plugins (python-lsp-black & friends) ship NO binary — they
+		# are Python modules loaded through pylsp's plugin entry points, so
+		# a `bin` check would fail forever on an otherwise working install.
+		# Probe by importing the module with the same interpreter the
+		# distro's pylsp runs under. Requires python3; absent python3 means
+		# the plugin cannot work either way.
+		if have_native_cmd python3 && python3 -c "import ${SPEC_CHECK#py:}" >/dev/null 2>&1; then
+			PROBE_MATCH="${SPEC_CHECK#py:}"
+			return 0
+		fi
+		return 1
+		;;
+	match:*)
+		# Companion tools whose major.minor MUST track a master tool's
+		# version (observed: zls 0.16 refuses to serve zig 0.17 outright —
+		# presence alone lies, the binary answers --version and then dies).
+		# Probe version AGREEMENT instead. The master itself being missing
+		# is not the companion's failure — pass here; the master's own spec
+		# reports it (avoids double-reporting one root cause).
+		local master="${SPEC_CHECK#match:}" my_ver master_ver
+		have_native_cmd "$SPEC_ID" || return 1
+		if ! have_native_cmd "$master"; then
+			PROBE_MATCH="$SPEC_ID"
+			return 0
+		fi
+		my_ver=$(extract_version "$SPEC_ID" "${SPEC_VER_RE:-$DEFAULT_VER_RE}")
+		master_ver=$(extract_version "$master" "${SPEC_VER_RE:-$DEFAULT_VER_RE}")
+		if [ -n "$my_ver" ] && [ -n "$master_ver" ] && [ "$my_ver" = "$master_ver" ]; then
+			PROBE_MATCH="$SPEC_ID"
+			return 0
+		fi
+		return 1
 		;;
 	*)
 		have_native_cmd "$SPEC_ID"
