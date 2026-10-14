@@ -119,10 +119,13 @@ _strategy_hint() {
 		echo "cargo install $args"
 		;;
 	pip)
-		echo "pip3 install $args"
+		echo "pip3 install --user $args"
 		;;
 	brew)
 		echo "brew install $args"
+		;;
+	zig-zls-pair)
+		echo "brew install zls zig@<zls-version>  # version-locked pair (zls ceiling)"
 		;;
 	rustup)
 		echo "https://rustup.rs/"
