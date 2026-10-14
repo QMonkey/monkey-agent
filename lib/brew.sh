@@ -7,6 +7,16 @@
 # (lib/clone.sh) — clone.sh therefore also lives in the bootstrap common set.
 
 # ──────────────────────────── Homebrew ────────────────────────────
+# Heavy brew formulae (name patterns): installs that dwarf a normal
+# bottle — zig pulls LLVM and builds from source where brew ships no
+# bottle for the distro (observed on Tumbleweed); marksman pulls the .NET
+# runtime. Every brew lane installing them runs at no less than
+# RETRY_T_HUGE (enforced in brew_install_retry, the one point all lanes
+# pass through). The BREW_FIRST batch lane keeps a blanket RETRY_T_HUGE
+# on top: a batch can drag heavy formulae in as DEPENDENCIES of innocent
+# names, which a name table cannot see.
+BREW_HEAVY_NAMES="zig zig@* zls marksman"
+
 # Names that should prefer Homebrew over the system package manager: system
 # repos ship versions that lag far behind (fzf: 0.44 on Ubuntu noble vs
 # current 0.7x). Projects append names here.
@@ -45,6 +55,45 @@ probe_brew_name() {
 # (release when the holder dies), so killing the orphan IS the unlock.
 # Scoped to cmdlines mentioning the brew prefix (a bare `pkill brew` misses
 # the ruby worker); only fires after OUR OWN timed-out attempt.
+# zig+zls must be version-locked: zls refuses to serve a zig whose
+# major.minor differs, and brew's zls formula lags its zig formula (the
+# naive `brew install zig zls` yields zig 0.17 + zls 0.16 — a broken pair).
+# Install the pair at the ZLS CEILING: whatever zls version brew carries,
+# zig comes from the matching versioned formula (zig@X.Y — keg-only, so it
+# is force-linked after the newer plain `zig` is removed). Without a
+# versioned zig@X.Y formula the step falls back to latest-latest and leaves
+# the verdict to the match:zig probe (install_strategy re-probes).
+install_zig_zls_pair() {
+	have_native_cmd brew || return 1
+	local zls_xy zpath zver
+	zls_xy=$(brew info zls 2>/dev/null | head -1 | grep -oE 'stable [0-9]+\.[0-9]+' | grep -oE '[0-9]+\.[0-9]+$')
+	[ -n "$zls_xy" ] || return 1
+	info "installing the zig+zls pair at brew's zls version ($zls_xy)..."
+	if brew info "zig@$zls_xy" >/dev/null 2>&1; then
+		brew_install_retry "$RETRY_T_HUGE" "brew install zls zig@$zls_xy" zls "zig@$zls_xy" || return 1
+		# keg-only: zig@X.Y never lands in brew's bin — swap the `zig`
+		# symlink from the (newer) plain formula to the pinned one. Nothing
+		# in the installer ecosystem brings plain zig back (no monkey-*
+		# install.sh references it), and the match:zig probe guards the pair on every run.
+		brew uninstall zig >/dev/null 2>&1 || true
+		brew link --force --overwrite "zig@$zls_xy" >/dev/null 2>&1 || true
+		hash -r
+		# The symlink swap is the whole point of the pair — verify what
+		# `zig` actually resolves to on PATH (not just what brew linked).
+		zpath=$(native_bin_path zig 2>/dev/null) || zpath=""
+		if [ -n "$zpath" ]; then
+			zver=$(extract_version "$zpath")
+		fi
+		if [ "${zver:-}" != "$zls_xy" ]; then
+			warn "zig resolves to ${zver:-unknown} (${zpath:-not found}), expected $zls_xy — zls will refuse it; match:zig keeps reporting the pair."
+			return 1
+		fi
+		return 0
+	fi
+	# No versioned formula for the zls ceiling: latest-latest, honestly probed.
+	brew_install_retry "$RETRY_T_HUGE" "brew install zig zls" zig zls
+}
+
 cleanup_timed_out_brew() {
 	local prefix
 	prefix="$(brew --prefix 2>/dev/null)" || return 0
@@ -58,9 +107,31 @@ cleanup_timed_out_brew() {
 # One brew install with the standard retry; a timed-out attempt (rc 124)
 # triggers the orphan cleanup so the retry ladder does not hit the same
 # lock again. Returns the install's exit code.
+#
+# Heavy-formula timeout FLOOR, applied here (not per call site) so every
+# brew lane gets it uniformly: zig pulls LLVM and builds from source where
+# brew ships no bottle for the distro (observed on Tumbleweed); marksman
+# pulls the .NET runtime. Their installs dwarf a normal bottle — no lane
+# may run them at a lower tier than RETRY_T_HUGE, whatever the caller
+# passed. The BREW_FIRST batch lane additionally keeps a blanket
+# RETRY_T_HUGE: a batch can drag heavy formulae in as DEPENDENCIES of
+# innocent names, which a per-name floor cannot see.
 brew_install_retry() {
 	local t="$1" desc="$2"
 	shift 2
+	local f n
+	for f in "$@"; do
+		for n in $BREW_HEAVY_NAMES; do
+			# ${f%%@*}: versioned formulae (zig@0.16) count as their base name.
+			[ "${f%%@*}" = "$n" ] || continue
+			# if-form, not `[ ] &&`: with t already at HUGE the AND-list
+			# would return 1 and set -e would abort the caller.
+			if [ "$t" -lt "$RETRY_T_HUGE" ]; then
+				t="$RETRY_T_HUGE"
+			fi
+			break 2 # fixed ceiling — no later name can raise it further
+		done
+	done
 	local brc=0
 	# Brew can stall two different ways under retry→timeout, whose child
 	# sits in a NON-foreground process group — ANY prompt there is frozen
