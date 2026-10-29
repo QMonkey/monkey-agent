@@ -1,0 +1,33 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": [
+    "superpowers@git+https://github.com/obra/superpowers.git"
+  ],
+  "provider": {
+    "llm": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "LLM Gateway",
+      "options": {
+        "baseURL": "$__OPENCODE_LLM_BASE_URL__",
+        "apiKey": "{env:$__OPENCODE_LLM_API_KEY_ENV_NAME__}"
+      },
+      "models": {
+        "$__OPENCODE_LLM_MODEL__": {
+          "name": "$__OPENCODE_LLM_MODEL__",
+          "reasoning": true
+        }
+      }
+    }
+  },
+  "model": "llm/$__OPENCODE_LLM_MODEL__",
+  "permission": {
+    "read": "allow",
+    "external_directory": {
+      "*": "allow"
+    },
+    "bash": {
+      "tmux kill-server": "ask",
+      "tmux kill-server *": "ask"
+    }
+  }
+}
