@@ -1,0 +1,20 @@
+# dsh web profile — plugin manifest (one npm package id per line).
+# Every id verified against the npm registry on 2026-10-24; see the
+# research notes atop cordis.patch.yml.template for the sources.
+#
+#   updater            — @zhengjunyao/dsh-updater: tracks dsh releases,
+#                        one-click update with atomic backup and
+#                        automatic rollback on a failed start (the
+#                        developer-preview survival kit)
+#   permission-rules   — dsh-permission-rules: declarative permission
+#                        rules (same posture as the opencode side)
+#   at-file            — dsh-at-file: Codex-style @file mentions in the
+#                        web composer
+#   notify             — dsh-notify-me: desktop notifications on
+#                        completion / needs-input / approval requests
+#                        (zero-dependency; fills the "agent finished,
+#                        call me" gap tmux tooling cannot cover for dsh)
+@zhengjunyao/dsh-updater
+dsh-permission-rules
+dsh-at-file
+dsh-notify-me
