@@ -1,0 +1,11 @@
+# Machine-local values — never commit (the real file lives outside this
+# checkout, at ~/.config/agent/secrets.env; this is belt-and-suspenders).
+secrets.env
+
+# Backups made when the installer replaces a foreign config file.
+*.pre-agent.bak
+
+# Editor / OS droppings.
+*.swp
+*~
+.DS_Store
