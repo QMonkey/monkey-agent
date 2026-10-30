@@ -158,6 +158,12 @@ install_shared_secrets() {
 	if [ -n "$generated" ]; then
 		info "Auto-generated daemon tokens:$generated (openssl rand -hex 32; rotate by hand in ${SECRETS_FILE#"$HOME"/})."
 	fi
+	# NO_PROXY default: the template's value only seeds a FRESH file; an
+	# existing file missing the key would otherwise fill from the (unset)
+	# environment and render empty — and an empty NO_PROXY with a proxy set
+	# pushes even loopback traffic (the gateway's own WS/UI binds) through
+	# the proxy.
+	export NO_PROXY="${NO_PROXY:-localhost,127.0.0.1,::1}"
 	write_secrets_template \
 		LLM_API_KEY LLM_BASE_URL LLM_MODEL \
 		OPENCODE_LLM_API_KEY OPENCODE_LLM_BASE_URL OPENCODE_LLM_MODEL \
@@ -167,7 +173,8 @@ install_shared_secrets() {
 		QWEN_QQ_APP_ID QWEN_QQ_APP_SECRET \
 		OPENCLAW_LLM_API_KEY OPENCLAW_LLM_BASE_URL OPENCLAW_LLM_MODEL \
 		OPENCLAW_DINGTALK_ACCESS_TOKEN OPENCLAW_DINGTALK_SECRET \
-		QQBOT_APP_ID QQBOT_CLIENT_SECRET OPENCLAW_GATEWAY_TOKEN
+		OPENCLAW_QQ_APP_ID OPENCLAW_QQ_CLIENT_SECRET OPENCLAW_QQ_ALLOW_FROM \
+		HTTPS_PROXY HTTP_PROXY NO_PROXY OPENCLAW_GATEWAY_TOKEN
 	wire_secrets_profile
 }
 
