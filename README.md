@@ -315,5 +315,4 @@ scripts/              shared installer/check framework (a `git subtree` of
                       github.com/QMonkey/monkey-scripts)
 ```
 
-Adding an agent means adding one folder — the skeleton and framework stay
-untouched.
+Adding an agent means adding one folder — the skeleton and framework stay untouched.
