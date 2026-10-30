@@ -212,8 +212,77 @@ wire_secrets_profile() {
 	# head class: the partition (append_env_block) keeps this block ahead
 	# of every normal/tail block — the exec-terminator ordering is the
 	# framework's partition rule now, not this repo's content matching.
+	# tmux coverage comes FREE from the family's tmux config: Linux leaves
+	# default-command empty, so every new window is a LOGIN shell and reads
+	# .zprofile itself (a fresh window yields the secrets with the server env unset)
+	# — no snapshot mirroring into the running server, which would only add a divergence surface.
 	append_env_block "agent secrets (remove these two lines to disable)" \
 		'[[ -f "$HOME/.config/agent/secrets.env" ]] && { set -a; source "$HOME/.config/agent/secrets.env"; set +a; }' "head"
+}
+
+# resolve_llm_model_caps <model-id> — print "<context> <output> <efforts>" for the model from
+# models.dev (the metadata source opencode itself embeds for KNOWN
+# providers; a custom provider's models are invisible to it, so the agents
+# resolve and render the numbers themselves). Matching ladder, best-effort:
+#   1. vendor prefix: "zhipu/glm-5.3-flash" → a models.dev provider whose
+#      name starts with "zhipu" ("zhipuai") carrying the bare model id —
+#      the canonical vendor entry wins over third-party mirrors
+#   2. any provider carrying the full id or the bare id
+# Output falls back to the conservative 128000/32768 floor when the fetch
+# fails (offline) or nothing matches: a floor only costs early compaction
+# on big-window models, while an overshoot can 400 every request.
+# 20s ceiling: installs are interactive; models.dev answers in seconds.
+resolve_llm_model_caps() {
+	local id="$1" out
+	out=$(
+		curl -fsSL --max-time 30 https://models.dev/api.json 2>/dev/null | python3 -c '
+import json, sys
+try:
+	db = json.load(sys.stdin)
+except Exception:
+	sys.exit(0)
+mid = sys.argv[1]
+vendor, _, bare = mid.partition("/")
+def scan(pred):
+	for p, info in db.items():
+		for m, meta in (info.get("models") or {}).items():
+			if pred(p, m, meta):
+				lim = meta.get("limit") or {}
+				c, o = lim.get("context"), lim.get("output")
+				if c and o:
+					# Third field: the reasoning-effort values the model
+					# accepts (reasoning_options[].values, "-" when the
+					# model declares none) — the caller gates the effort
+					# config on it instead of guessing.
+					efforts = "-"
+					for opt in meta.get("reasoning_options") or []:
+						if opt.get("type") == "effort" and opt.get("values"):
+							efforts = ",".join(str(v) for v in opt["values"])
+					return "%s %s %s" % (c, o, efforts)
+	return ""
+if vendor:
+	r = scan(lambda p, m, meta: p.startswith(vendor) and m in (bare, mid))
+	if r:
+		print(r)
+		sys.exit(0)
+print(scan(lambda p, m, meta: m in (mid, bare)))
+' "$id" 2>/dev/null
+	) || out=""
+	out="${out:-128000 32768 -}"
+	printf '%s\n' "$out"
+}
+
+# pick_reasoning_effort <efforts-csv> — the effort tier to configure for a
+# model whose accepted values are listed (from models.dev reasoning_options).
+# "high" is the daily-driver default (cost/latency vs quality), "xhigh" the
+# fallback for ladders that skip it; empty = nothing safe to declare, the
+# caller omits the effort and the runtime/model default applies.
+pick_reasoning_effort() {
+	case ",$1," in
+	*,high,*) printf 'high' ;;
+	*,xhigh,*) printf 'xhigh' ;;
+	*) printf '' ;;
+	esac
 }
 
 # llm_health <label> <KEY_OVERRIDE> <BASE_OVERRIDE> <MODEL_OVERRIDE> <fill_hint> <fallback_note> [RENDERED_FALLBACK_FN]
@@ -247,6 +316,7 @@ channel_reachability() {
 	fi
 	return 0
 }
+
 # systemd_user_available — 1 when a systemd USER manager is actually
 # reachable (systemctl present AND the user bus answers). False on
 # WSL/containers without systemd: callers skip registration with a WARN.
