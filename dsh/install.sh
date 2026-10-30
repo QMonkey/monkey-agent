@@ -5,14 +5,24 @@
 # executes at source time (no top-level commands — only function
 # definitions).
 #
-# Research (pinned 2026-10-24):
+# Research:
 #   - Package: npm @deepseek-ai/dsh (verified npm name; bin: `dsh`) — the
 #     docs' `npm install -g @deepseek-ai/dsh` is the same package with the
 #     `dsh` bin. Node.js 22+ required.
 #   - Plugin management (`dsh plugin`) forwards to pnpm — pnpm is
 #     provisioned automatically before any plugin install.
 #   - Web profile only (headless/GUI/TUI out of scope — design §4.4).
-#   - Config: ~/.dsh/profiles/web/cordis.patch.yml (YAML, comments legal).
+#   - Config: ~/.dsh/profiles/web/cordis.patch.yml — read fresh on every
+#     request (config edits need no restart); one Cordis patch entry per
+#     plugin row. apiKeyEnv is the credential indirection: the KEY VALUE
+#     never enters the file, dsh resolves it from the process environment
+#     per request (secrets.env sourcing feeds the interactive shell).
+#   - Renderer: pure envsubst over $__X__ placeholders — values are
+#     quoted-scalar-safe (URLs/model ids/numbers), via the environment
+#     only, never argv.
+#   - Base URL / model id fall back to the OFFICIAL public endpoint (public
+#     information); a private endpoint or model id is a secret — set
+#     DSH_LLM_BASE_URL / DSH_LLM_MODEL (or the shared LLM_* layer).
 #
 # _dsh_install_binary — make sure `dsh` exists: Node.js 22+ and npm via the
 # framework package manager when missing, then the pinned npm global
@@ -145,11 +155,38 @@ install_agent_dsh() {
 
 	local template="$AGENT_REPO_ROOT/dsh/cordis.patch.yml.template"
 	local rendered="$AGENT_HOME/dsh/cordis.patch.yml"
+	# Model capability limits (contextWindow / maxTokens): resolved from
+	# models.dev against the EFFECTIVE model (see resolve_llm_model_caps in
+	# lib/agent.sh); a miss lands on the conservative 128000/32768 floor.
+	# The reasoningEfforts map declares the endpoint's accepted effort
+	# labels (models.dev reasoning_options) as identity mappings — the
+	# wire value equals the label, so nothing is invented; levels left
+	# undeclared become unavailable (dsh semantics: the map IS the
+	# capability surface). No declaration when the model publishes none.
+	local eff_ctx eff_out eff_efforts eff_effort_fragment=""
+	read -r eff_ctx eff_out eff_efforts <<<"$(resolve_llm_model_caps "$eff_model")"
+	if [ "$eff_efforts" != "-" ] && [ -n "$eff_efforts" ]; then
+		# Vocabulary translation: models.dev marks a model's no-thinking
+		# tier as "none"; dsh's level id for it is "off", whose wire value
+		# here is the endpoint's own disable label ("none"). Other levels
+		# map identically (the models.dev values ARE the endpoint labels).
+		local eff_map="" e wire
+		local IFS=","
+		for e in $eff_efforts; do
+			case "$e" in
+			none) wire="off: none" ;;
+			*) wire="$e: $e" ;;
+			esac
+			eff_map+="              $wire"$'\n'
+		done
+		eff_effort_fragment="reasoningEfforts:"$'\n'"${eff_map%$'\n'}"
+	fi
 	(
 		# The RESOLVED override-layer values are exported here.
 		export DSH_API_KEY_ENV="$eff_key_var" \
 			DSH_LLM_BASE_URL="$eff_base" \
-			DSH_LLM_MODEL="$eff_model"
+			DSH_LLM_MODEL="$eff_model" \
+			DSH_LLM_CTX="$eff_ctx" DSH_LLM_OUT="$eff_out" DSH_LLM_EFFORT="$eff_effort_fragment"
 		render "$template" "$rendered"
 	) || rc=$?
 
