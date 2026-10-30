@@ -1,30 +1,3 @@
-# ─────────────────────────────────────────────────────────────────────
-# OpenClaw gateway — systemd USER unit template.
-# Rendered at install to ~/.config/systemd/user/openclaw-gateway.service.
-#
-# RESEARCH (pinned 2026-10-24, docs.openclaw.ai): `openclaw gateway run`
-# is the foreground Gateway process (config errors exit 78); it listens on
-# 127.0.0.1:18789. `openclaw gateway install` would register a
-# vendor-managed daemon — this unit is this repo's own registration
-# instead, so PATH + credentials handling match the family pattern. Do
-# not ALSO run `openclaw gateway install`: two supervisors would compete
-# for the same Gateway state directory.
-#
-# Unit shape mirrors the Qwen Code units (Type=simple, Restart=on-failure,
-# EnvironmentFile for credentials — the rendered unit lands 0600 and never
-# inlines secrets; absolute ExecStart since systemd does not read the
-# shell's PATH; %h-free literal $__HOME__ resolution at render time). The
-# Gateway also auto-loads the same credential env file as its documented
-# global fallback env source; the EnvironmentFile= line makes the env
-# explicit for the unit.
-#
-# Registration (install.sh, best-effort):
-#   systemctl --user daemon-reload
-#   systemctl --user enable --now openclaw-gateway.service
-#   loginctl enable-linger <user>   # survive logout/reboot; best-effort
-# On hosts without a working systemd user session (WSL/containers) the
-# installer skips registration with a WARN — the unit files still land.
-# ─────────────────────────────────────────────────────────────────────
 [Unit]
 Description=OpenClaw gateway (resident personal-assistant daemon)
 Documentation=https://docs.openclaw.ai/gateway
