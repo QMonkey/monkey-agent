@@ -1,49 +1,3 @@
-# ─────────────────────────────────────────────────────────────────────
-# DeepSeek Harness — web profile Cordis patch template.
-# Rendered to ~/.config/agent/dsh/cordis.patch.yml and symlinked to
-# ~/.dsh/profiles/web/cordis.patch.yml (dsh reads the patch fresh on
-# every request; no restart needed for config edits).
-#
-# RESEARCH FINDINGS (pinned 2026-10-24; developer preview — re-verify
-# on upstream breaking changes):
-#
-# 1. Config location + format. DSH keeps per-profile user patches as
-#    YAML at $DSH_HOME/profiles/<profile>/cordis.patch.yml (a list of
-#    Cordis patch entries, one per plugin row), plus a machine-local
-#    home-level $DSH_HOME/cordis.patch.yml that outranks it.
-#    $DSH_HOME defaults to ~/.dsh. For the standard `dsh web` launch
-#    the profile is `web`, so the file this template renders to is
-#    ~/.dsh/profiles/web/cordis.patch.yml.
-#    Sources: https://github.com/deepseek-ai/deepseek-harness/blob/master/apps/cli/README.md
-#    and apps/cli/reference/README.md (patch composition / DSH_HOME default).
-#
-# 2. Env-var indirection: SUPPORTED. A provider's `apiKeyEnv` is a
-#    credential reference resolved per request through the harness
-#    credential seam — "no secret enters the configuration file"
-#    (packages/llm/llm-pi-ai/README.md). So the template renders the
-#    VARIABLE NAME into apiKeyEnv and the API key value never
-#    touches this file: dsh reads it from the process environment at
-#    runtime (interactive shells get it via secrets.env sourcing).
-#
-# 3. Provider shape (pi-ai custom route): a route the installed catalog
-#    does not ship needs `api` (wire protocol: openai-completions,
-#    openai-responses, or anthropic-messages), `baseURL`, and a
-#    non-empty `models` list. `apiKeyEnv` names the env var holding the
-#    key. Sources: packages/llm/llm-pi-ai/README.md,
-#    docs/user/guide/providers.md (custom model API).
-#
-# 4. Renderer. The file is YAML, so render_json does not apply: dsh/
-#    install.sh ships its own python3 renderer (UPPER_SNAKE placeholders
-#    become json.dumps(value), which is a valid YAML 1.2 double-quoted
-#    scalar, so URLs/model ids/paths are safe without PyYAML),
-#    structurally validated with PyYAML when it is importable. Values
-#    reach the render process through the environment only — never argv.
-#
-# 5. Defaults. Base URL and model id fall back to DeepSeek's OFFICIAL
-#    public endpoint/model (public information); a private gateway or a
-#    private model id is a secret — set DSH_LLM_BASE_URL /
-#    DSH_LLM_MODEL (or the shared LLM_* layer) and re-run the installer.
-# ─────────────────────────────────────────────────────────────────────
 - id: llm-pi-ai
   config:
     providers:
@@ -53,3 +7,6 @@
         baseURL: $__DSH_LLM_BASE_URL__
         models:
           - id: $__DSH_LLM_MODEL__
+            contextWindow: $__DSH_LLM_CTX__
+            maxTokens: $__DSH_LLM_OUT__
+            $__DSH_LLM_EFFORT__
