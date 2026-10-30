@@ -1,11 +1,13 @@
 {
+  $__QWEN_LLM_EFFORT__
   "modelProviders": {
     "openai": [
       {
         "id": "$__QWEN_LLM_MODEL__",
         "name": "$__QWEN_LLM_MODEL__",
         "baseUrl": "$__QWEN_LLM_BASE_URL__",
-        "envKey": "QWEN_LLM_API_KEY"
+        "envKey": "QWEN_LLM_API_KEY",
+        "contextWindowSize": $__QWEN_LLM_CTX__
       }
     ]
   },
