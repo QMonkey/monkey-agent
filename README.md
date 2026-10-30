@@ -54,7 +54,7 @@ hand when a real need shows up.
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/QMonkey/monkey-agent/master/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/QMonkey/monkey-agent/master/install.sh | bash 2>&1 | tee monkey-agent-install.log
 ```
 
 Or from a checkout:
@@ -93,7 +93,7 @@ The full variable set:
 | Qwen Code QQ Bot channel                     | `QWEN_QQ_APP_ID` / `QWEN_QQ_APP_SECRET`                       | QQ Bot Open Platform (q.qq.com); empty → QR-code login on the channel's first start                                                              |
 | OpenClaw overrides                           | `OPENCLAW_LLM_API_KEY` / `_BASE_URL` / `_MODEL`               | optional, per-field                                                                                                                              |
 | OpenClaw dingtalk channel                    | `OPENCLAW_DINGTALK_ACCESS_TOKEN` / `OPENCLAW_DINGTALK_SECRET` | an independent dingtalk app — never shared with the Qwen Code one                                                                                |
-| OpenClaw QQ Bot channel                      | `QQBOT_APP_ID` / `QQBOT_CLIENT_SECRET`                        | the official plugin's OWN env names (no config fields); an independent QQ bot — never shared with Qwen's                                         |
+| OpenClaw QQ Bot channel                      | `OPENCLAW_QQ_APP_ID` / `OPENCLAW_QQ_CLIENT_SECRET`            | the official plugin's OWN env names (no config fields); an independent QQ bot — never shared with Qwen's                                         |
 | Qwen serve daemon (auto-generated)           | `QWEN_SERVER_TOKEN`                                           | auto-generated at install (`openssl rand -hex 32`) → `--require-auth`; a hand-set value wins; emptying it by hand → token-less loopback (warned) |
 | OpenClaw gateway (auto-generated)            | `OPENCLAW_GATEWAY_TOKEN`                                      | same posture for the gateway control plane (dashboard + agent API) on 127.0.0.1:18789                                                            |
 
@@ -207,8 +207,9 @@ Notes:
   `OPENCLAW_GATEWAY_TOKEN` is auto-generated at install (persisted in
   secrets.env) — the gateway boots with token auth; emptying it by hand
   reverts to token-less on loopback (warned). The QQ Bot channel's
-  credentials use the upstream's own env names (`QQBOT_APP_ID` /
-  `QQBOT_CLIENT_SECRET` in secrets.env) — no config fields.
+  credentials live in secrets.env (`OPENCLAW_QQ_APP_ID` /
+  `OPENCLAW_QQ_CLIENT_SECRET` + the required allowlist
+  `OPENCLAW_QQ_ALLOW_FROM`) and render as `${VAR}` config references.
 
 ### Removing the resident services
 
@@ -285,7 +286,7 @@ dependencies. Run it after installing to see what is missing.
   disconnected. Fill the dingtalk pairs (`QWEN_DINGTALK_*` and
   `OPENCLAW_DINGTALK_*` — two independent dingtalk apps; Stream Mode
   enabled in the developer portal) and the QQ pairs (`QWEN_QQ_*` or
-  leave empty for QR-code login; `QQBOT_APP_ID` / `QQBOT_CLIENT_SECRET`
+  leave empty for QR-code login; `OPENCLAW_QQ_APP_ID` / `OPENCLAW_QQ_CLIENT_SECRET`
   for OpenClaw — from the QQ Bot Open Platform, q.qq.com), then re-run.
   After a credentials change restart the daemons:
   `systemctl --user restart qwen-serve.service openclaw-gateway.service`.
