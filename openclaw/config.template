@@ -1,0 +1,117 @@
+// ─────────────────────────────────────────────────────────────────────
+// OpenClaw gateway config template — ~/.openclaw/openclaw.json.
+//
+// RESEARCH FINDINGS (pinned 2026-10-24, official docs https://docs.openclaw.ai):
+//
+// 1. Location + format. A single JSON5 config at ~/.openclaw/openclaw.json
+//    (docs.openclaw.ai/gateway/configuration). Regular JSON is accepted
+//    ("Regular JSON works too"). The // comments in this template are
+//    legal JSON5 and pass through rendering unchanged (the shared
+//    renderer is pure envsubst over the $__X__ placeholders — it touches
+//    nothing else). Strict schema
+//    validation: unknown keys make the Gateway REFUSE TO START, so this
+//    template only declares keys verified against the current schema
+//    (configuration-reference / configuration-examples pages).
+//
+// 2. Config file ownership. OpenClaw-owned writes replace the config
+//    atomically (rename onto the path) — "avoid symlinked config layouts"
+//    (a symlink would be replaced by a regular file). The installer
+//    therefore renders to ~/.config/agent/openclaw/openclaw.json and
+//    installs a REGULAR FILE COPY at ~/.openclaw/openclaw.json (a
+//    documented deviation from the family symlink convention, forced by
+//    upstream; this repo's template remains the structural truth —
+//    re-running the installer re-renders and overwrites hand edits).
+//
+// 3. LLM backend (docs.openclaw.ai/gateway/configuration-examples,
+//    "Local models only" + "Custom model providers"). Any OpenAI-compatible
+//    endpoint: models.providers.<id> with baseUrl / apiKey / api:
+//    "openai-completions" and a models[] list; the agent default model is
+//    referenced as "<provider>/<model-id>". Provider id used here: "custom"
+//    (the id non-interactive onboarding also uses for custom endpoints).
+//    The API key NEVER renders as a value: `${VAR}` substitution is a
+//    documented config feature (docs.openclaw.ai/gateway/configuration/
+//    environment-variables → "Env var substitution in config values") —
+//    the template carries the NAME only, the value comes from the process
+//    environment / secrets.env (0600, rendered by install.sh; that
+//    file is a documented global fallback env source for the Gateway).
+//
+// 4. DingTalk channel. NOT a core channel — it ships as the official
+//    DingTalk plugin (github.com/DingTalk-Real-AI/dingtalk-openclaw-connector,
+//    npm @dingtalk-real-ai/dingtalk-connector; OpenClaw ≥ 2026.8.1).
+//    Manual-config field names (docs/DINGTALK_MANUAL_SETUP.md): the
+//    "channels" key gains "dingtalk-connector" with clientId (AppKey) and
+//    clientSecret (AppSecret). The member is injected below as static
+//    text through the $__OPENCLAW_CHANNELS__ placeholder (install.sh);
+//    credentials are `${VAR}` references, never values.
+//    If the plugin is not installed, the installer renders channels as {}
+//    (an unknown channel key would fail strict validation and block the
+//    Gateway from starting).
+//
+// 5. Gateway auth. gateway.auth.mode "token" + gateway.auth.token via
+//    ${OPENCLAW_GATEWAY_TOKEN} (env substitution, same mechanism as 3).
+//    The auth block is injected ONLY when OPENCLAW_GATEWAY_TOKEN is set;
+//    without it the Gateway runs token-less on its loopback bind — the
+//    installer WARNs so the choice is informed (same posture as the Qwen
+//    serve daemon's optional bearer token).
+//
+// 6. Loop / scheduled wakeups. Top-level "cron" key enables the cron
+//    engine (configuration-examples "Cron jobs"); individual scheduled
+//    jobs live OUTSIDE the config and are added at runtime:
+//    `openclaw automations add --name ... --every 30m --message ...`
+//    (docs.openclaw.ai/gateway/configuration-examples "Periodic
+//    monitoring"; the legacy heartbeat config migrated into automations).
+//
+// 7. Gateway service. `openclaw gateway run` is the foreground Gateway
+//    process (docs.openclaw.ai/gateway; startup config errors exit 78).
+//    `openclaw gateway install` would register the vendor-managed daemon;
+//    this repo ships its own systemd user unit / launchd plist instead
+//    (openclaw/service/) so the EnvironmentFile + PATH handling match the
+//    rest of the family. Port 18789, loopback bind (documented defaults).
+// ─────────────────────────────────────────────────────────────────────
+{
+  "agents": {
+    "defaults": {
+      "workspace": "$__OPENCLAW_WORKSPACE__",
+      "model": {
+        "primary": "$__OPENCLAW_PRIMARY_MODEL__"
+      }
+    }
+  },
+  "models": {
+    "mode": "merge",
+    "providers": {
+      "custom": {
+        "baseUrl": "$__OPENCLAW_LLM_BASE_URL__",
+        "apiKey": "${$__OPENCLAW_LLM_API_KEY_ENV_NAME__}",
+        "api": "openai-completions",
+        "authHeader": true,
+        "models": [
+          {
+            "id": "$__OPENCLAW_LLM_MODEL__",
+            "name": "$__OPENCLAW_LLM_MODEL__",
+            "api": "openai-completions",
+            "reasoning": false,
+            "input": ["text"],
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+            "contextWindow": 128000,
+            "maxTokens": 32000
+          }
+        ]
+      }
+    }
+  },
+  "channels": {
+$__OPENCLAW_CHANNELS__
+  },
+  "cron": {
+    "enabled": true,
+    "sessionRetention": "24h"
+  },
+  "gateway": {
+    "mode": "local",
+    "port": 18789,
+    "bind": "loopback",
+$__OPENCLAW_GATEWAY_AUTH__
+    "reload": { "mode": "hybrid" }
+  }
+}
