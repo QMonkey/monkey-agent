@@ -5,8 +5,7 @@
 # ELSE executes at source time (no top-level commands — only function
 # definitions).
 #
-# Research (pinned 2026-10-24, official docs
-# https://qwenlm.github.io/qwen-code-docs/):
+# Research (official docs https://qwenlm.github.io/qwen-code-docs/):
 #   - Package: npm @qwen-code/qwen-code (bin: `qwen`). Node.js 22+ required.
 #   - Credentials: the single 0600 secrets.env (sourced by interactive
 #     shells via .zprofile AND fed to the resident daemon via the unit's
@@ -68,6 +67,17 @@ _qwen_install_binary() {
 # A failed unit render skips the whole registration: daemon-reload would
 # load a stale/broken unit into the manager.
 _qwen_register_services_linux() {
+	# `qwen serve --channel` = ONE resident process: the loopback HTTP+SSE
+	# daemon (Web Shell, port 4170) AND the channel adapters. Unit shape
+	# mirrors the official local-launch template: Type=simple,
+	# Restart=on-failure, absolute ExecStart (systemd does not read the
+	# shell's PATH), EnvironmentFile= at the 0600 secrets.env — never
+	# inlining the token. AUTH POSTURE: QWEN_SERVER_TOKEN auto-generated
+	# at install (fill-empty-only, a hand-set value always wins); the
+	# daemon boots with --require-auth. On a token-less loopback bind
+	# "any local process that can reach the port can use the full
+	# operator API, including executing code as the daemon user" —
+	# emptying the variable by hand reverts to token-less (warned).
 	local rc=0 qwen_bin
 	qwen_bin=$(command -v qwen)
 	local unit_dir="$HOME/.config/systemd/user"
@@ -191,9 +201,20 @@ install_agent_qwen_code() {
 	if [ -z "$(secret QWEN_LLM_API_KEY 2>/dev/null)" ] && [ -z "$(secret LLM_API_KEY 2>/dev/null)" ]; then
 		info "LLM_API_KEY / QWEN_LLM_API_KEY not set — the config references an empty variable; fill ${SECRETS_FILE#"$HOME"/} and re-run."
 	fi
+	# Model capability limit (contextWindowSize): resolved from models.dev
+	# against the EFFECTIVE model (see resolve_llm_model_caps in lib/agent.sh); a miss
+	# lands on the conservative 128000 floor.
+	# Effort (settings' model.reasoningEffort): only when the model's
+	# reasoning_options (models.dev) declare a safe tier (high, else
+	# xhigh) — qwen-code clamps to the model's ladder on top of this.
+	local eff_ctx eff_out eff_efforts eff_pick eff_effort_fragment=""
+	read -r eff_ctx eff_out eff_efforts <<<"$(resolve_llm_model_caps "$eff_model")"
+	eff_pick=$(pick_reasoning_effort "$eff_efforts")
+	[ -n "$eff_pick" ] && eff_effort_fragment='"model": { "reasoningEffort": "'"$eff_pick"'" },'
 	(
 		# The RESOLVED override-layer values are exported here.
-		export QWEN_LLM_BASE_URL="$eff_base" QWEN_LLM_MODEL="$eff_model"
+		export QWEN_LLM_BASE_URL="$eff_base" QWEN_LLM_MODEL="$eff_model" \
+			QWEN_LLM_CTX="$eff_ctx" QWEN_LLM_EFFORT="$eff_effort_fragment"
 		export QWEN_CHANNEL_CWD="$qwen_cwd_esc"
 		render \
 			"$AGENT_REPO_ROOT/qwen-code/settings.json.template" \
