@@ -38,7 +38,7 @@ resolve_enabled_agents
 
 # ──────────────────────── version gate ────────────────────────
 # node: shared runtime floor for dsh / qwen-code / openclaw (opencode ships
-# its own binary). Higher per-agent floors (openclaw wants 24.16+) and the
+# its own binary). Higher per-agent floors (openclaw wants 26.12+) and the
 # NodeSource/brew upgrade paths live in the agent install hooks — this spec
 # is the distro-package best effort (pkg.sh maps node → nodejs per distro).
 MAIN_VERSION="node|ver:22|Node.js (agents' runtime)|pkg"
