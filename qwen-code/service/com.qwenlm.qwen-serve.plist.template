@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Qwen Code serve daemon — launchd user agent template. Rendered at install
+  to ~/Library/LaunchAgents/com.qwenlm.qwen-serve.plist (0600). One daemon
+  hosts the loopback HTTP+SSE API (Web Shell, port 4170) AND the DingTalk
+  channel (via the channel flag). Shape mirrors the official local-launch template
+  (docs/users/qwen-serve-deploy-local.md, macOS section): absolute
+  ProgramArguments (launchd does not read the shell's PATH), PATH via
+  EnvironmentVariables, KeepAlive.SuccessfulExit=false to match systemd
+  Restart=on-failure (a clean SIGTERM stays stopped), ThrottleInterval
+  mirroring RestartSec. Credentials are NOT inlined: launchd has no
+  EnvironmentFile, so the command sources the 0600 secrets.env first —
+  the same file the systemd unit consumes.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.qwenlm.qwen-serve</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>-c</string>
+    <string>. '$__HOME__/.config/agent/secrets.env' || exit 1; exec '$__QWEN_BIN__' serve --channel --hostname 127.0.0.1 --port 4170$__QWEN_SERVE_AUTH_FLAG__</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>$__QWEN_SERVICE_PATH__</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>StandardOutPath</key>
+  <string>$__HOME__/Library/Logs/qwen-serve/out.log</string>
+  <key>StandardErrorPath</key>
+  <string>$__HOME__/Library/Logs/qwen-serve/err.log</string>
+</dict>
+</plist>
