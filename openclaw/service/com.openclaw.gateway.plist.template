@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  OpenClaw gateway — launchd user agent template.
+  Rendered at install to ~/Library/LaunchAgents/com.openclaw.gateway.plist
+  (0600). Shape mirrors the Qwen Code plists: absolute ProgramArguments
+  (launchd does not read the shell's PATH), PATH via EnvironmentVariables,
+  KeepAlive.SuccessfulExit=false to match systemd Restart=on-failure (a
+  clean SIGTERM stays stopped), ThrottleInterval mirroring RestartSec.
+  Credentials are NOT inlined: launchd has no EnvironmentFile, so the
+  command sources the 0600 secrets.env first — the same file the
+  systemd unit consumes and the Gateway auto-loads as its documented
+  global fallback env source. Do not ALSO run `openclaw gateway install`:
+  two supervisors would compete for the same Gateway state directory.
+
+  Registration (install.sh, best-effort):
+    launchctl bootout gui/<uid>/com.openclaw.gateway   # ignore "not found"
+    launchctl bootstrap gui/<uid> <plist>
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.openclaw.gateway</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/sh</string>
+    <string>-c</string>
+    <string>. '$__HOME__/.config/agent/secrets.env' || exit 1; exec '$__OPENCLAW_BIN__' gateway run</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>$__OPENCLAW_CHANNEL_CWD__</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>$__OPENCLAW_SERVICE_PATH__</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>StandardOutPath</key>
+  <string>$__HOME__/Library/Logs/openclaw-gateway/out.log</string>
+  <key>StandardErrorPath</key>
+  <string>$__HOME__/Library/Logs/openclaw-gateway/err.log</string>
+</dict>
+</plist>
