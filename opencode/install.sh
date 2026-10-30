@@ -21,7 +21,7 @@
 # OpenCode's native {env:VAR} syntax and OpenCode resolves it from the
 # process environment at runtime (.zshrc sources secrets.env).
 #
-# Binary install method, PINNED 2026-10-24 from https://opencode.ai/docs.
+# Binary install method, from https://opencode.ai/docs.
 # PRIMARY: `npm install -g opencode-ai` — same lane as every other agent
 # (dsh / qwen-code / openclaw), so one upgrade path serves all
 # (`npm i -g <pkg>@latest`), and node/npm is already a family-wide
@@ -103,12 +103,25 @@ install_agent_opencode() {
 	if [ -z "$(secret OPENCODE_LLM_API_KEY 2>/dev/null)" ] && [ -z "$(secret LLM_API_KEY 2>/dev/null)" ]; then
 		info "LLM_API_KEY / OPENCODE_LLM_API_KEY not set — the config references an empty variable; fill ${SECRETS_FILE#"$HOME"/} and re-run."
 	fi
+	# Model capability limits (context window / max output) and the
+	# reasoning-effort support, resolved from models.dev against the
+	# EFFECTIVE model — the values follow the user's model switches without
+	# template edits; a miss lands on the conservative floor. The effort
+	# block renders ONLY when the model's reasoning_options include "high"
+	# (data-driven gating — an effort option sent to a model that does not
+	# declare it risks a gateway 400).
+	local eff_ctx eff_out eff_efforts eff_effort_fragment="" eff_pick
+	read -r eff_ctx eff_out eff_efforts <<<"$(resolve_llm_model_caps "$eff_model")"
+	eff_pick=$(pick_reasoning_effort "$eff_efforts")
+	[ -n "$eff_pick" ] && eff_effort_fragment='"options": { "reasoningEffort": "'"$eff_pick"'" },'
 	(
 		# The RESOLVED override-layer values are exported under the
 		# agent-prefixed placeholder names (secret() applies the
 		# OPENCODE_LLM_* → shared LLM_* precedence).
 		export OPENCODE_LLM_BASE_URL="$eff_base" OPENCODE_LLM_MODEL="$eff_model" \
-			OPENCODE_LLM_API_KEY_ENV_NAME="$eff_key_name"
+			OPENCODE_LLM_API_KEY_ENV_NAME="$eff_key_name" \
+			OPENCODE_LLM_CTX="$eff_ctx" OPENCODE_LLM_OUT="$eff_out" \
+			OPENCODE_LLM_EFFORT="$eff_effort_fragment"
 		render "$template" "$rendered"
 	) || rc=$?
 
