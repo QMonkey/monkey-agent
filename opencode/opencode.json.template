@@ -14,7 +14,12 @@
       "models": {
         "$__OPENCODE_LLM_MODEL__": {
           "name": "$__OPENCODE_LLM_MODEL__",
-          "reasoning": true
+          "reasoning": true,
+          $__OPENCODE_LLM_EFFORT__
+          "limit": {
+            "context": $__OPENCODE_LLM_CTX__,
+            "output": $__OPENCODE_LLM_OUT__
+          }
         }
       }
     }
