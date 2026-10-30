@@ -6,7 +6,7 @@
 # function definitions).
 #
 # Checks, in order:
-#   1. node 24.16+/26.1+  (OpenClaw's runtime floor — HIGHER than the
+#   1. node 26.12+  (OpenClaw's runtime floor — HIGHER than the
 #      other agents' 22+; WARN + non-zero when older)
 #   2. binary + version   (`openclaw --version`)
 #   3. llm_health         (secrets presence + LLM-endpoint connectivity,
@@ -108,16 +108,17 @@ _openclaw_service_health() {
 checkhealth_agent_openclaw() {
 	local rc=0
 
-	# Node 24.16+ / 26.1+ floor (OpenClaw-specific — higher than the
-	#    other agents' 22+).
+	# Node 26.12+ floor (OpenClaw-specific — higher than the other
+	#    agents' 22+). Upstream openclaw@2026.10.9 engines:
+	#    >=24.22.1 <25 || >=26.12.1 — we standardize on the 26 track.
 	if have_native_cmd node; then
 		ok "node version: $(node -v 2>/dev/null)"
-		if ! bin_at_least node 24.16; then
-			warn "node is older than OpenClaw's floor (24.16+ / 26.1+) — upgrade it (NodeSource setup_24.x / brew upgrade node), then re-run the installer."
+		if ! bin_at_least node 26.12; then
+			warn "node is older than OpenClaw's floor (26.12+) — upgrade it (NodeSource / brew upgrade node), then re-run the installer."
 			rc=1
 		fi
 	else
-		warn "node not found — OpenClaw requires Node.js 24.16+ / 26.1+: $(get_install_hint node)"
+		warn "node not found — OpenClaw requires Node.js 26.12+: $(get_install_hint node)"
 		rc=1
 	fi
 
@@ -146,10 +147,10 @@ checkhealth_agent_openclaw() {
 	else
 		warn "DingTalk credentials incomplete — the channel cannot connect until OPENCLAW_DINGTALK_ACCESS_TOKEN / OPENCLAW_DINGTALK_SECRET are filled (AppKey/Client ID and AppSecret/Client Secret of the DingTalk bot)."
 	fi
-	if [ -n "$(secret QQBOT_APP_ID 2>/dev/null)" ] && [ -n "$(secret QQBOT_CLIENT_SECRET 2>/dev/null)" ]; then
-		ok "QQ Bot credentials are set (QQBOT_APP_ID / QQBOT_CLIENT_SECRET)."
+	if [ -n "$(secret OPENCLAW_QQ_APP_ID 2>/dev/null)" ] && [ -n "$(secret OPENCLAW_QQ_CLIENT_SECRET 2>/dev/null)" ]; then
+		ok "QQ Bot credentials are set (OPENCLAW_QQ_APP_ID / OPENCLAW_QQ_CLIENT_SECRET)."
 	else
-		warn "QQ Bot credentials not set — the qqbot channel cannot connect until QQBOT_APP_ID / QQBOT_CLIENT_SECRET are filled (QQ Bot Open Platform, q.qq.com)."
+		warn "QQ Bot credentials not set — the qqbot channel cannot connect until OPENCLAW_QQ_APP_ID / OPENCLAW_QQ_CLIENT_SECRET / OPENCLAW_QQ_ALLOW_FROM are filled (QQ Bot Open Platform, q.qq.com)."
 	fi
 	if [ -n "$(secret OPENCLAW_GATEWAY_TOKEN 2>/dev/null)" ]; then
 		ok "Gateway control-plane token is set (token-auth posture)."
@@ -174,7 +175,7 @@ checkhealth_agent_openclaw() {
 
 	# DingTalk reachability (outbound WebSocket; route-level probe).
 	channel_reachability openclaw OPENCLAW_DINGTALK_ACCESS_TOKEN https://api.dingtalk.com DingTalk
-	channel_reachability openclaw QQBOT_CLIENT_SECRET https://api.sgroup.qq.com "QQ Bot"
+	channel_reachability openclaw OPENCLAW_QQ_CLIENT_SECRET https://api.sgroup.qq.com "QQ Bot"
 
 	return "$rc"
 }
