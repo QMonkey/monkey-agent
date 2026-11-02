@@ -1,5 +1,6 @@
 {
   $__QWEN_LLM_EFFORT__
+  "approvalMode": "auto",
   "modelProviders": {
     "openai": [
       {
@@ -20,38 +21,6 @@
     "name": "$__QWEN_LLM_MODEL__"
   },
   "channels": {
-    "qq-main": {
-      "type": "qq",
-      "appID": "$QWEN_QQ_APP_ID",
-      "appSecret": "$QWEN_QQ_APP_SECRET",
-      "sandbox": false,
-      "privatePolicy": "open",
-      "sessionScope": "thread",
-      "cwd": "$__QWEN_CHANNEL_CWD__",
-      "instructions": "You are a concise coding assistant responding via QQ Bot.",
-      "groupPolicy": "disabled",
-      "groups": {
-        "*": {
-          "requireMention": true
-        }
-      }
-    },
-    "dingtalk-main": {
-      "type": "dingtalk",
-      "clientId": "$QWEN_DINGTALK_ACCESS_TOKEN",
-      "clientSecret": "$QWEN_DINGTALK_SECRET",
-      "useConnectionManager": true,
-      "privatePolicy": "open",
-      "sessionScope": "user",
-      "cwd": "$__QWEN_CHANNEL_CWD__",
-      "instructions": "You are a concise coding assistant responding via DingTalk.",
-      "groupPolicy": "open",
-      "atSender": true,
-      "groups": {
-        "*": {
-          "requireMention": true
-        }
-      }
-    }
+    $__QWEN_CHANNELS__
   }
 }
