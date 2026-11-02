@@ -7,7 +7,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 EnvironmentFile=$__HOME__/.config/agent/secrets.env
-ExecStart=$__QWEN_BIN__ serve --channel --hostname 127.0.0.1 --port 4170$__QWEN_SERVE_AUTH_FLAG__
+ExecStart=$__QWEN_BIN__ serve --channel all --hostname 127.0.0.1 --port 4170$__QWEN_SERVE_AUTH_FLAG__
 Restart=on-failure
 RestartSec=5
 
