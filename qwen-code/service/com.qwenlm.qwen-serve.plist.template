@@ -21,7 +21,7 @@
   <array>
     <string>/bin/bash</string>
     <string>-c</string>
-    <string>. '$__HOME__/.config/agent/secrets.env' || exit 1; exec '$__QWEN_BIN__' serve --channel --hostname 127.0.0.1 --port 4170$__QWEN_SERVE_AUTH_FLAG__</string>
+    <string>. '$__HOME__/.config/agent/secrets.env' || exit 1; exec '$__QWEN_BIN__' serve --channel all --hostname 127.0.0.1 --port 4170$__QWEN_SERVE_AUTH_FLAG__</string>
   </array>
   <key>EnvironmentVariables</key>
   <dict>
