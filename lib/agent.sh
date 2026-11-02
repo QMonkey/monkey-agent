@@ -120,7 +120,7 @@ write_secrets_template() {
 	for var in "$@"; do
 		_check_var_name "$var"
 	done
-	render "$AGENT_REPO_ROOT/secrets.env.template" "$SECRETS_FILE" fill "$@"
+	render_fill "$AGENT_REPO_ROOT/secrets.env.template" "$SECRETS_FILE" "$@"
 }
 
 # ──────────────────────── config rendering ────────────────────────
