@@ -345,7 +345,7 @@ install_agent_openclaw() {
 	#    argv, and contains the token NAME only — `${OPENCLAW_GATEWAY_TOKEN}`.
 	local gateway_auth_json=""
 	if [ -n "$(secret OPENCLAW_GATEWAY_TOKEN 2>/dev/null)" ]; then
-		gateway_auth_json='    "auth": { "mode": "token", "token": "${OPENCLAW_GATEWAY_TOKEN}" },'
+		gateway_auth_json='"auth": { "mode": "token", "token": "${OPENCLAW_GATEWAY_TOKEN}" },'
 		ok "OPENCLAW_GATEWAY_TOKEN is set — the gateway boots with token auth."
 	else
 		warn "OPENCLAW_GATEWAY_TOKEN is not set — the gateway will run token-less: any local process that can reach 127.0.0.1:18789 can drive the assistant (dashboard + full agent API). Set OPENCLAW_GATEWAY_TOKEN and re-run to enable gateway.auth token mode."
@@ -373,7 +373,7 @@ install_agent_openclaw() {
 	dt_token=$(secret OPENCLAW_DINGTALK_ACCESS_TOKEN 2>/dev/null)
 	dt_secret=$(secret OPENCLAW_DINGTALK_SECRET 2>/dev/null)
 	if [ "$plugin_dingtalk" -eq 1 ] && [ -n "$dt_token" ] && [ -n "$dt_secret" ]; then
-		channels_json='    "dingtalk-connector": {
+		channels_json='"dingtalk-connector": {
       "enabled": true,
       "clientId": "${OPENCLAW_DINGTALK_ACCESS_TOKEN}",
       "clientSecret": "${OPENCLAW_DINGTALK_SECRET}"
@@ -403,8 +403,9 @@ install_agent_openclaw() {
 				[ -n "$qq_id" ] && qq_items+="\"${qq_id}\","
 			done
 			qq_items="${qq_items%,}"
-			[ -n "$channels_json" ] && channels_json="$channels_json,"
-			channels_json="$channels_json"'    "qqbot": {
+			[ -n "$channels_json" ] && channels_json="$channels_json,
+			"
+			channels_json="$channels_json"'"qqbot": {
       "enabled": true,
       "dmPolicy": "open",
       "appId": "${OPENCLAW_QQ_APP_ID}",
