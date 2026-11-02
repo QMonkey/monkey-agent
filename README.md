@@ -95,7 +95,7 @@ The full variable set:
 | OpenClaw dingtalk channel                    | `OPENCLAW_DINGTALK_ACCESS_TOKEN` / `OPENCLAW_DINGTALK_SECRET`                 | an independent dingtalk app — never shared with the Qwen Code one                                                                                |
 | OpenClaw QQ Bot channel                      | `OPENCLAW_QQ_APP_ID` / `OPENCLAW_QQ_CLIENT_SECRET` / `OPENCLAW_QQ_ALLOW_FROM` | rendered as `${VAR}` config references; the allowlist is required by the qqbot 2.0 schema; an independent QQ bot — never shared with Qwen's      |
 | Qwen serve daemon (auto-generated)           | `QWEN_SERVER_TOKEN`                                                           | auto-generated at install (`openssl rand -hex 32`) → `--require-auth`; a hand-set value wins; emptying it by hand → token-less loopback (warned) |
-| OpenClaw gateway (auto-generated)            | `OPENCLAW_GATEWAY_TOKEN`                                                      | same posture for the gateway control plane (dashboard + agent API) on 127.0.0.1:18789                                                            |
+| OpenClaw gateway (auto-generated)            | `OPENCLAW_GATEWAY_TOKEN`                                                      | same posture for the gateway control plane (dashboard + agent API) on 127.0.0.1:18790                                                            |
 
 Notes:
 
@@ -203,7 +203,7 @@ Notes:
 - Credentials: the single `~/.config/agent/secrets.env` (0600) — the gateway reads it via the unit's EnvironmentFile=; the config references variables BY NAME.
 - The gateway runs as a resident service: `openclaw-gateway.service`
   (macOS launchd label `com.openclaw.gateway`), loopback
-  `127.0.0.1:18789`, with the cron engine (scheduled wake-ups) enabled.
+  `127.0.0.1:18790`, with the cron engine (scheduled wake-ups) enabled.
   `OPENCLAW_GATEWAY_TOKEN` is auto-generated at install (persisted in
   secrets.env) — the gateway boots with token auth; emptying it by hand
   reverts to token-less on loopback (warned). The QQ Bot channel's
