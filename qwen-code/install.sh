@@ -211,11 +211,69 @@ install_agent_qwen_code() {
 	read -r eff_ctx eff_out eff_efforts <<<"$(resolve_llm_model_caps "$eff_model")"
 	eff_pick=$(pick_reasoning_effort "$eff_efforts")
 	[ -n "$eff_pick" ] && eff_effort_fragment='"model": { "reasoningEffort": "'"$eff_pick"'" },'
+	# The channels object is built member-by-member, gated on each
+	# channel's credentials: the channel worker validates every configured
+	# channel at startup and EXITS on the first empty credential, killing
+	# every other channel with it (--channel all runs all configured
+	# channels). No credentials -> "channels": {} -> the daemon boots
+	# clean with zero channels.
+	local channels_json="" qq_fragment="" dt_fragment=""
+	local qq_id qq_secret dt_token dt_secret
+	qq_id=$(secret QWEN_QQ_APP_ID 2>/dev/null)
+	qq_secret=$(secret QWEN_QQ_APP_SECRET 2>/dev/null)
+	if [ -n "$qq_id" ] && [ -n "$qq_secret" ]; then
+		qq_fragment='"qq-main": {
+      "type": "qq",
+      "appID": "$QWEN_QQ_APP_ID",
+      "appSecret": "$QWEN_QQ_APP_SECRET",
+      "sandbox": true,
+      "privatePolicy": "open",
+      "sessionScope": "thread",
+      "cwd": "'"$HOME"'",
+      "instructions": "You are a concise coding assistant responding via QQ Bot.",
+      "groupPolicy": "disabled",
+      "groups": {
+        "*": {
+          "requireMention": true
+        }
+      }
+    }'
+	fi
+	dt_token=$(secret QWEN_DINGTALK_ACCESS_TOKEN 2>/dev/null)
+	dt_secret=$(secret QWEN_DINGTALK_SECRET 2>/dev/null)
+	if [ -n "$dt_token" ] && [ -n "$dt_secret" ]; then
+		dt_fragment='    "dingtalk-main": {
+      "type": "dingtalk",
+      "clientId": "$QWEN_DINGTALK_ACCESS_TOKEN",
+      "clientSecret": "$QWEN_DINGTALK_SECRET",
+      "useConnectionManager": true,
+      "privatePolicy": "open",
+      "sessionScope": "user",
+      "cwd": "'"$HOME"'",
+      "instructions": "You are a concise coding assistant responding via DingTalk.",
+      "groupPolicy": "open",
+      "atSender": true,
+      "groups": {
+        "*": {
+          "requireMention": true
+        }
+      }
+    }'
+	fi
+	if [ -n "$qq_fragment" ]; then
+		channels_json="$qq_fragment"
+		[ -n "$dt_fragment" ] && channels_json="$channels_json,
+$dt_fragment"
+	elif [ -n "$dt_fragment" ]; then
+		channels_json="$dt_fragment"
+	fi
+	channels_json="${channels_json:+$channels_json}"
+
 	(
 		# The RESOLVED override-layer values are exported here.
 		export QWEN_LLM_BASE_URL="$eff_base" QWEN_LLM_MODEL="$eff_model" \
 			QWEN_LLM_CTX="$eff_ctx" QWEN_LLM_EFFORT="$eff_effort_fragment"
-		export QWEN_CHANNEL_CWD="$qwen_cwd_esc"
+		export QWEN_CHANNEL_CWD="$qwen_cwd_esc" QWEN_CHANNELS="$channels_json"
 		render \
 			"$AGENT_REPO_ROOT/qwen-code/settings.json.template" \
 			"$AGENT_HOME/qwen/settings.json"
