@@ -31,8 +31,11 @@
       }
     }
   },
+  "plugins": {
+    "allow": ["dingtalk-connector", "openclaw-qqbot"]
+  },
   "channels": {
-$__OPENCLAW_CHANNELS__
+    $__OPENCLAW_CHANNELS__
   },
   "cron": {
     "enabled": true,
@@ -40,9 +43,9 @@ $__OPENCLAW_CHANNELS__
   },
   "gateway": {
     "mode": "local",
-    "port": 18789,
+    "port": 18790,
     "bind": "loopback",
-$__OPENCLAW_GATEWAY_AUTH__
+    $__OPENCLAW_GATEWAY_AUTH__
     "reload": { "mode": "hybrid" }
   }
 }
