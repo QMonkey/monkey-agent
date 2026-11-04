@@ -22,12 +22,13 @@ hand when a real need shows up.
   run — re-running never clobbers hand-edited values, and it never blocks
   on a missing secret: every enabled agent's config renders whether or
   not its keys are present, ready to be filled in later.
-- **Structure in git, values local**: config templates (`$__X__`
-  placeholders, rendered by envsubst) are committed; company URLs, model
+- **Structure in git, values local**: config templates carry the
+  structure (model catalogs, channel members, optional keys) as gomplate
+  `{{ .Env.NAME }}` references and `{{ range }}`/`{{ if }}` blocks; company URLs, model company URLs, model
   ids and keys are rendered into `~/.config/agent/` at install time and
   never enter the checkout. Templates may also carry literal `${VAR}` /
   `$VAR` by-name references — the render only ever touches its own
-  `$__X__` form, so runtime indirection survives untouched.
+  `{{ }}` syntax, so runtime indirection survives untouched.
 - **Resident services**: Qwen Code's serve daemon (loopback API + the
   DingTalk/QQ channels via `serve --channel`) and OpenClaw's gateway
   register as systemd user services (Linux) or launchd agents (macOS),
@@ -38,8 +39,9 @@ hand when a real need shows up.
 
 ## Requirements
 
-- Linux or macOS; bash 3.2+, curl, git; envsubst (gettext — config
-  template rendering), python3 (health probes).
+- Linux or macOS; bash 3.2+, curl, git; gomplate (config template
+  rendering — `brew install gomplate`, or the release binary; no Linux distro
+  packages it), python3 (health probes).
 - Node.js: DSH and Qwen Code need **22+**; OpenClaw needs **24.16+ /
   26.1+**. Provisioning goes through the framework's `ensure_node_at_least`:
   distro packages when new enough, Homebrew (which ships a current node on
@@ -83,25 +85,53 @@ export LLM_MODEL="..."
 
 The full variable set:
 
-| Layer                                        | Variables                                                                     | Notes                                                                                                                                            |
-| -------------------------------------------- | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Shared LLM backend (default for every agent) | `LLM_API_KEY` / `LLM_BASE_URL` / `LLM_MODEL`                                  | the only three needed with a single backend                                                                                                      |
-| OpenCode overrides                           | `OPENCODE_LLM_API_KEY` / `_BASE_URL` / `_MODEL`                               | optional, per-field                                                                                                                              |
-| DSH overrides                                | `DSH_LLM_API_KEY` / `_BASE_URL` / `_MODEL`                                    | optional, per-field                                                                                                                              |
-| Qwen Code overrides                          | `QWEN_LLM_API_KEY` / `_BASE_URL` / `_MODEL`                                   | optional, per-field                                                                                                                              |
-| Qwen Code dingtalk channel                   | `QWEN_DINGTALK_ACCESS_TOKEN` / `QWEN_DINGTALK_SECRET`                         | AppKey / AppSecret of a Stream-Mode bot                                                                                                          |
-| Qwen Code QQ Bot channel                     | `QWEN_QQ_APP_ID` / `QWEN_QQ_APP_SECRET`                                       | QQ Bot Open Platform (q.qq.com); empty → QR-code login on the channel's first start                                                              |
-| OpenClaw overrides                           | `OPENCLAW_LLM_API_KEY` / `_BASE_URL` / `_MODEL`                               | optional, per-field                                                                                                                              |
-| OpenClaw dingtalk channel                    | `OPENCLAW_DINGTALK_ACCESS_TOKEN` / `OPENCLAW_DINGTALK_SECRET`                 | an independent dingtalk app — never shared with the Qwen Code one                                                                                |
-| OpenClaw QQ Bot channel                      | `OPENCLAW_QQ_APP_ID` / `OPENCLAW_QQ_CLIENT_SECRET` / `OPENCLAW_QQ_ALLOW_FROM` | rendered as `${VAR}` config references; the allowlist is required by the qqbot 2.0 schema; an independent QQ bot — never shared with Qwen's      |
-| Qwen serve daemon (auto-generated)           | `QWEN_SERVER_TOKEN`                                                           | auto-generated at install (`openssl rand -hex 32`) → `--require-auth`; a hand-set value wins; emptying it by hand → token-less loopback (warned) |
-| OpenClaw gateway (auto-generated)            | `OPENCLAW_GATEWAY_TOKEN`                                                      | same posture for the gateway control plane (dashboard + agent API) on 127.0.0.1:18790                                                            |
+| Layer                                        | Variables                                                                     | Notes                                                                                                                                              |
+| -------------------------------------------- | ----------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Shared LLM backend (default for every agent) | `LLM_API_KEY` / `LLM_BASE_URL` / `LLM_MODEL`                                  | the only three needed with a single backend                                                                                                        |
+| Shared model catalog (optional)              | `LLM_MODELS`                                                                  | comma-separated extra models offered to every agent; see **Model catalog** below                                                                   |
+| Daemon egress proxy (optional)               | `HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY`                                     | filled from the installer's environment; `NO_PROXY` must keep the loopback binds off the proxy (the installer merges them, checkhealth re-asserts) |
+| OpenCode overrides                           | `OPENCODE_LLM_API_KEY` / `_BASE_URL` / `_MODEL`                               | optional, per-field                                                                                                                                |
+| DSH overrides                                | `DSH_LLM_API_KEY` / `_BASE_URL` / `_MODEL`                                    | optional, per-field                                                                                                                                |
+| Qwen Code overrides                          | `QWEN_LLM_API_KEY` / `_BASE_URL` / `_MODEL`                                   | optional, per-field                                                                                                                                |
+| Qwen Code dingtalk channel                   | `QWEN_DINGTALK_ACCESS_TOKEN` / `QWEN_DINGTALK_SECRET`                         | AppKey / AppSecret of a Stream-Mode bot                                                                                                            |
+| Qwen Code QQ Bot channel                     | `QWEN_QQ_APP_ID` / `QWEN_QQ_APP_SECRET`                                       | QQ Bot Open Platform (q.qq.com); empty → QR-code login on the channel's first start                                                                |
+| OpenClaw overrides                           | `OPENCLAW_LLM_API_KEY` / `_BASE_URL` / `_MODEL`                               | optional, per-field                                                                                                                                |
+| OpenClaw dingtalk channel                    | `OPENCLAW_DINGTALK_ACCESS_TOKEN` / `OPENCLAW_DINGTALK_SECRET`                 | an independent dingtalk app — never shared with the Qwen Code one                                                                                  |
+| OpenClaw QQ Bot channel                      | `OPENCLAW_QQ_APP_ID` / `OPENCLAW_QQ_CLIENT_SECRET` / `OPENCLAW_QQ_ALLOW_FROM` | rendered as `${VAR}` config references; the allowlist is required by the qqbot 2.0 schema; an independent QQ bot — never shared with Qwen's        |
+| Qwen serve daemon (auto-generated)           | `QWEN_SERVER_TOKEN`                                                           | auto-generated at install (`openssl rand -hex 32`) → `--require-auth`; a hand-set value wins; emptying it by hand → token-less loopback (warned)   |
+| OpenClaw gateway (auto-generated)            | `OPENCLAW_GATEWAY_TOKEN`                                                      | same posture for the gateway control plane (dashboard + agent API) on 127.0.0.1:18790                                                              |
+
+### Model catalog (`LLM_MODELS`)
+
+`LLM_MODEL` is the primary model. `LLM_MODELS` (optional, comma-separated)
+adds further models to every agent's provider list: the primary is hoisted to
+the front, the rest follow in listed order, duplicates and stray whitespace
+are dropped. Each entry is resolved against the cached
+[models.dev](https://models.dev/api.json) catalog at install time, so the
+rendered configs carry each model's own `contextWindow` / `maxOutputTokens`
+and its declared reasoning ladder:
+
+- an unknown or limit-less model falls back to a conservative
+  `128000 / 32768` with no effort option — undershooting only costs earlier
+  compaction, overshooting can make every request fail;
+- a reasoning tier is configured only when the model declares one (`high`,
+  else `xhigh`), because sending an effort a model does not list risks a 400
+  on the first request;
+- the catalog is fetched once per installer run and never cached on disk, so
+  re-running the installer is how a model's published limits get picked up.
+
+There is no per-agent `*_LLM_MODELS`: the catalog is shared, while the
+override layers above stay per-field.
 
 Notes:
 
-- **Only secrets need exporting**: an unset variable renders an empty
-  field (never a blocked install); checkhealth's presence + connectivity
-  sections then tell you exactly what to fill. No public endpoint/model
+- **Only secrets need exporting**: an unset _secret_ never blocks the
+  install — the hooks export the resolved value (empty included), so every
+  agent's config renders and checkhealth's presence + connectivity sections
+  tell you what to fill. That is different from a template _reference_ that
+  nothing exports: that fails the one render loudly (names reported, no
+  file written) and the run continues with the other agents, because a
+  silently empty value once crash-looped a daemon. No public endpoint/model
   defaults are baked in.
 - The two daemon tokens are auto-generated by install.sh's shared
   secrets step (only when empty; gated on the agent being enabled) and
@@ -226,8 +256,8 @@ matching plists from `~/Library/LaunchAgents/`.
 ## Configs: structure in git, values local
 
 Each agent folder in this repo is self-contained: config templates
-(`$__X__` placeholders), plugin lists, service units. The installer
-renders the templates with envsubst (gettext — placeholders only, no
+(gomplate `{{ .Env.NAME }}` references), plugin lists, service units. The
+installer renders the templates with gomplate (references only, no
 format awareness) and writes the result atomically with 0600
 permissions into `~/.config/agent/` — company URLs, model ids and keys
 exist only there, never in the checkout. `~/.config/opencode/opencode.json`
@@ -261,7 +291,8 @@ Four kinds of checks (three-state `[ OK ] / [WARN] / [FAIL]` output):
 1. **Tool health** — opencode / dsh / qwen / openclaw binaries and
    versions, plus each agent's Node.js floor.
 2. **Secrets health** — secrets.env presence and 0600 permissions,
-   required variables non-empty (names only, never values).
+   required variables non-empty (names only, never values), and the
+   `NO_PROXY` loopback floor the resident daemons need.
 3. **Connectivity** — a minimal authenticated request (`GET {baseURL}/models`,
    ~10s timeout) against the base URL read from the rendered configs;
    WARN-level, advisory only. Export `SKIP_CONNECTIVITY=1` to skip on
@@ -305,6 +336,10 @@ dependencies. Run it after installing to see what is missing.
 ```text
 install.sh            one-shot installer (agent selection via --with-*)
 checkhealth.sh        dependency + health check
+checktemplates.sh     template/rendering gate: every template renders to valid
+                      JSON/YAML/XML through the real render(), every {{ .Env.X }}
+                      has an assignment at its render site, and a missing one
+                      must fail the render by name
 lib/agent.sh          shared helpers: secrets resolution, credential fill,
                       block wiring, agent contract (rendering lives in the
                       framework: scripts/lib/template.sh)
