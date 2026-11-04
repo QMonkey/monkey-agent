@@ -140,7 +140,8 @@ checkhealth_agent_openclaw() {
 	# LLM half: presence + connectivity (llm_health — the same call as the
 	#    other agents; the sections below are openclaw-specific and
 	#    order-independent of it).
-	llm_health openclaw OPENCLAW_LLM_API_KEY OPENCLAW_LLM_BASE_URL OPENCLAW_LLM_MODEL "" ""
+	llm_health openclaw OPENCLAW_LLM_API_KEY OPENCLAW_LLM_BASE_URL OPENCLAW_LLM_MODEL "" "" "" \
+		"$HOME/.config/agent/openclaw/openclaw.json" json:models.providers.custom.models
 
 	if [ -n "$(secret OPENCLAW_DINGTALK_ACCESS_TOKEN 2>/dev/null)" ] && [ -n "$(secret OPENCLAW_DINGTALK_SECRET 2>/dev/null)" ]; then
 		ok "DingTalk credentials are set (OPENCLAW_DINGTALK_ACCESS_TOKEN / OPENCLAW_DINGTALK_SECRET)."
