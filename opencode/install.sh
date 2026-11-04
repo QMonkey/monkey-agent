@@ -1,40 +1,29 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
-# opencode/install.sh — the OpenCode agent hook. Sourced by the entry points
-# via run_agent_hook: defines install_agent_opencode() and NOTHING ELSE
-# executes at source time (no top-level commands — only function definitions).
+# opencode/install.sh — the OpenCode agent hook, sourced through
+# run_agent_hook: defines install_agent_opencode() and nothing else runs at
+# source time. Install does four things: registers this agent's override
+# vars (via the shared write_secrets_template call), ensures the binary,
+# renders opencode.json.template → ~/.config/agent/opencode.json, and links
+# it to ~/.config/opencode/opencode.json.
 #
-# What install does: persists the agent's override vars (via install.sh's
-# shared write_secrets_template call), installs the opencode binary if
-# missing, renders opencode.json.template → ~/.config/agent/opencode.json,
-# and links it to ~/.config/opencode/opencode.json.
-#
-# Template references ({{ .Env.NAME }}, resolved from the caller-exported
-# environment): OPENCODE_LLM_BASE_URL / OPENCODE_LLM_MODEL (values, via the
-# override layer) and OPENCODE_LLM_API_KEY_ENV_NAME (the NAME of the env
-# var holding the key — see install_agent_opencode).
-# NOTE: the tmux-scout plugin is NOT registered here — the tmux setup owns
-# that plugin file AND its OpenCode-side registration (done at tmux
-# startup), so this template only carries the agents' own plugins.
-#
-# The API key is NEVER rendered as a value: the config references it with
-# OpenCode's native {env:VAR} syntax and OpenCode resolves it from the
-# process environment at runtime (.zshrc sources secrets.env).
-#
-# Binary install method, from https://opencode.ai/docs.
-# PRIMARY: `npm install -g opencode-ai` — same lane as every other agent
-# (dsh / qwen-code / openclaw), so one upgrade path serves all
-# (`npm i -g <pkg>@latest`), and node/npm is already a family-wide
-# dependency. FALLBACK: the official script
-#     curl -fsSL https://opencode.ai/install | bash
-# (fully non-interactive — verified: no prompts, usage shows only
-# --version/--binary/--no-modify-path flags; installs to
-# ~/.opencode/bin/opencode and appends PATH lines to shell rc files) for
-# hosts without node/npm.
-
+# Pitfalls this file encodes:
+#   - The API key is NEVER rendered as a value: the config carries OpenCode's
+#     native {env:VAR} form, and the NAME is resolved at render time
+#     (OPENCODE_LLM_API_KEY when set, else the shared LLM_API_KEY). Template
+#     references: OPENCODE_LLM_BASE_URL / _MODEL (values) and
+#     OPENCODE_LLM_API_KEY_ENV_NAME (a NAME) — via the environment only.
+#   - The tmux-scout plugin is NOT registered here: the tmux setup owns both
+#     the plugin file and its OpenCode-side registration (at tmux startup).
+#   - Primary install lane is npm (`npm install -g opencode-ai`) — the same
+#     lane as every other agent, so one upgrade path serves all. The
+#     official script (https://opencode.ai/install) is the fallback for hosts
+#     without node/npm; verified fully non-interactive, but note it installs
 # _opencode_install_binary — make sure the opencode binary exists, using the
 # pinned official method. Idempotent: a present binary short-circuits.
 # Returns non-zero on a real failure (caller's hook wrapper collects it).
+
+#     to ~/.opencode/bin and appends PATH lines to shell rc files.
 _opencode_install_binary() {
 	if have_native_cmd opencode; then
 		ok "opencode already installed."
