@@ -9,7 +9,7 @@
 # missing, renders opencode.json.template → ~/.config/agent/opencode.json,
 # and links it to ~/.config/opencode/opencode.json.
 #
-# Template placeholders ($__X__ form, resolved from the caller-exported
+# Template references ({{ .Env.NAME }}, resolved from the caller-exported
 # environment): OPENCODE_LLM_BASE_URL / OPENCODE_LLM_MODEL (values, via the
 # override layer) and OPENCODE_LLM_API_KEY_ENV_NAME (the NAME of the env
 # var holding the key — see install_agent_opencode).
@@ -50,7 +50,7 @@ _opencode_install_binary() {
 	# entry required curl anyway, and local checkouts just take this path.
 	if ! npm_install_g opencode-ai; then
 		info "npm lane failed — falling back to the official install script (https://opencode.ai/install)..."
-		curl -fsSL https://opencode.ai/install | bash || rc=$?
+		retry -s "opencode installer" sh -c 'curl -fsSL https://opencode.ai/install | bash' || rc=$?
 	fi
 	if [ "$rc" -ne 0 ]; then
 		warn "opencode installation failed (rc $rc) — install it manually: npm i -g opencode-ai (or curl -fsSL https://opencode.ai/install | bash)"
@@ -84,13 +84,13 @@ install_agent_opencode() {
 	# Binary (official method, pinned — see header comment).
 	_opencode_install_binary || rc=$?
 
-	# Render the config. render is a pure envsubst engine — it cannot
+	# Render the config. render resolves references only — it cannot
 	#    apply the §4.2 per-field override precedence itself, so the
 	#    effective values are resolved here via secret() and exported;
 	#    __LLM_BASE_URL__/__LLM_MODEL__ then resolve to the override, and
 	#    the real secrets.env stays untouched.
 	local template="$AGENT_REPO_ROOT/opencode/opencode.json.template"
-	local rendered="$AGENT_HOME/opencode.json"
+	local rendered="$AGENT_HOME/opencode/opencode.json"
 	# The key renders as an {env:NAME} reference — resolve WHICH name (the
 	# OPENCODE_LLM_API_KEY override, or the shared LLM_API_KEY).
 	local eff_key_name="LLM_API_KEY"
@@ -103,25 +103,22 @@ install_agent_opencode() {
 	if [ -z "$(secret OPENCODE_LLM_API_KEY 2>/dev/null)" ] && [ -z "$(secret LLM_API_KEY 2>/dev/null)" ]; then
 		info "LLM_API_KEY / OPENCODE_LLM_API_KEY not set — the config references an empty variable; fill ${SECRETS_FILE#"$HOME"/} and re-run."
 	fi
-	# Model capability limits (context window / max output) and the
-	# reasoning-effort support, resolved from models.dev against the
-	# EFFECTIVE model — the values follow the user's model switches without
-	# template edits; a miss lands on the conservative floor. The effort
-	# block renders ONLY when the model's reasoning_options include "high"
-	# (data-driven gating — an effort option sent to a model that does not
-	# declare it risks a gateway 400).
-	local eff_ctx eff_out eff_efforts eff_effort_fragment="" eff_pick
-	read -r eff_ctx eff_out eff_efforts <<<"$(resolve_llm_model_caps "$eff_model")"
-	eff_pick=$(pick_reasoning_effort "$eff_efforts")
-	[ -n "$eff_pick" ] && eff_effort_fragment='"options": { "reasoningEffort": "'"$eff_pick"'" },'
+	# Model catalog: one "id|context|output|efforts|pick" row per model
+	# (llm_model_rows) — the template renders the models map from it, including
+	# the reasoning flag and the options block, which appears only when the
+	# model declares a safe tier (an effort sent to a model that does not
+	# declare one risks a gateway 400).
+	local model_rows
+	model_rows=$(llm_model_rows "$eff_model")
+	# The subshell is not for `|| rc=$?` (identical either way): it bounds these
+	# exports, so nothing resolved here survives into another agent's render, or
+	# into secret()'s process-env fallback. Keep the parentheses.
 	(
-		# The RESOLVED override-layer values are exported under the
-		# agent-prefixed placeholder names (secret() applies the
-		# OPENCODE_LLM_* → shared LLM_* precedence).
+		# Only resolved VALUES are exported. Every reference the template
+		# reads must be exported, empty included — gomplate aborts the render
+		# on an unset one and reports the offending names.
 		export OPENCODE_LLM_BASE_URL="$eff_base" OPENCODE_LLM_MODEL="$eff_model" \
-			OPENCODE_LLM_API_KEY_ENV_NAME="$eff_key_name" \
-			OPENCODE_LLM_CTX="$eff_ctx" OPENCODE_LLM_OUT="$eff_out" \
-			OPENCODE_LLM_EFFORT="$eff_effort_fragment"
+			OPENCODE_LLM_API_KEY_ENV_NAME="$eff_key_name" OPENCODE_LLM_MODEL_ROWS="$model_rows"
 		render "$template" "$rendered"
 	) || rc=$?
 
