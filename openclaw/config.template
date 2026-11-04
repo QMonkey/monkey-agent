@@ -1,9 +1,9 @@
 {
   "agents": {
     "defaults": {
-      "workspace": "$__OPENCLAW_WORKSPACE__",
+      "workspace": {{ .Env.OPENCLAW_WORKSPACE | toJSON }},
       "model": {
-        "primary": "$__OPENCLAW_PRIMARY_MODEL__"
+        "primary": {{ .Env.OPENCLAW_PRIMARY_MODEL | toJSON }}
       }
     }
   },
@@ -11,22 +11,28 @@
     "mode": "merge",
     "providers": {
       "custom": {
-        "baseUrl": "$__OPENCLAW_LLM_BASE_URL__",
-        "apiKey": "${$__OPENCLAW_LLM_API_KEY_ENV_NAME__}",
+        "baseUrl": {{ .Env.OPENCLAW_LLM_BASE_URL | toJSON }},
+        "apiKey": "{{ print "${" .Env.OPENCLAW_LLM_API_KEY_ENV_NAME "}" }}",
         "api": "openai-completions",
         "authHeader": true,
         "models": [
+{{- if ne .Env.OPENCLAW_LLM_MODEL_ROWS "" }}
+{{- range $i, $r := (strings.Split "\n" .Env.OPENCLAW_LLM_MODEL_ROWS) }}{{ $f := (strings.Split "|" $r) }}
+{{- if ne $i 0 }},{{ end }}
           {
-            "id": "$__OPENCLAW_LLM_MODEL__",
-            "name": "$__OPENCLAW_LLM_MODEL__",
+            "id": {{ index $f 0 | toJSON }},
+            "name": {{ index $f 0 | toJSON }},
             "api": "openai-completions",
-            "reasoning": true,
-            "input": ["text"],
-            $__OPENCLAW_LLM_EFFORT__
+            "reasoning": {{ if ne (index $f 3) "-" }}true{{ else }}false{{ end }},
+{{- if and (ne (index $f 3) "-") (ne (index $f 3) "") }}
+            "compat": { "supportedReasoningEfforts": [{{ range $j, $e := (strings.Split "," (index $f 3)) }}{{ if ne $j 0 }},{{ end }}{{ $e | toJSON }}{{ end }}] },
+{{- end }}
             "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
-            "contextWindow": $__OPENCLAW_LLM_CTX__,
-            "maxTokens": $__OPENCLAW_LLM_OUT__
+            "contextWindow": {{ index $f 1 }},
+            "maxTokens": {{ index $f 2 }}
           }
+{{- end }}
+{{- end }}
         ]
       }
     }
@@ -35,7 +41,22 @@
     "allow": ["dingtalk-connector", "openclaw-qqbot"]
   },
   "channels": {
-    $__OPENCLAW_CHANNELS__
+{{- if eq .Env.OPENCLAW_CHANNEL_DINGTALK "1" }}
+    "dingtalk-connector": {
+      "enabled": true,
+      "clientId": "${OPENCLAW_DINGTALK_ACCESS_TOKEN}",
+      "clientSecret": "${OPENCLAW_DINGTALK_SECRET}"
+    }{{ if and (eq .Env.OPENCLAW_CHANNEL_DINGTALK "1") (eq .Env.OPENCLAW_CHANNEL_QQ "1") }},{{ end }}
+{{- end }}
+{{- if eq .Env.OPENCLAW_CHANNEL_QQ "1" }}
+    "qqbot": {
+      "enabled": true,
+      "dmPolicy": "open",
+      "appId": "${OPENCLAW_QQ_APP_ID}",
+      "clientSecret": "${OPENCLAW_QQ_CLIENT_SECRET}",
+      "allowFrom": [{{ range $n, $a := (strings.Split "," .Env.OPENCLAW_QQ_ALLOW_FROM) }}{{ if ne $n 0 }},{{ end }}{{ $a | toJSON }}{{ end }}]
+    }
+{{- end }}
   },
   "cron": {
     "enabled": true,
@@ -45,7 +66,9 @@
     "mode": "local",
     "port": 18790,
     "bind": "loopback",
-    $__OPENCLAW_GATEWAY_AUTH__
+{{- if eq .Env.OPENCLAW_GATEWAY_AUTH "1" }}
+    "auth": { "mode": "token", "token": "${OPENCLAW_GATEWAY_TOKEN}" },
+{{- end }}
     "reload": { "mode": "hybrid" }
   }
 }
