@@ -2,11 +2,24 @@
   config:
     providers:
       shared-llm:
-        apiKeyEnv: $__DSH_API_KEY_ENV__
+        apiKeyEnv: {{ .Env.DSH_LLM_API_KEY_ENV_NAME }}
         api: openai-completions
-        baseURL: $__DSH_LLM_BASE_URL__
+        baseURL: {{ .Env.DSH_LLM_BASE_URL }}
         models:
-          - id: $__DSH_LLM_MODEL__
-            contextWindow: $__DSH_LLM_CTX__
-            maxTokens: $__DSH_LLM_OUT__
-            $__DSH_LLM_EFFORT__
+{{- if ne .Env.DSH_LLM_MODEL_ROWS "" }}
+{{- range $r := (strings.Split "\n" .Env.DSH_LLM_MODEL_ROWS) }}{{ $f := (strings.Split "|" $r) }}
+          - id: {{ index $f 0 }}
+            contextWindow: {{ index $f 1 }}
+            maxTokens: {{ index $f 2 }}
+{{- if and (ne (index $f 3) "-") (ne (index $f 3) "") }}
+            reasoningEfforts:
+{{- range $e := (strings.Split "," (index $f 3)) }}
+{{- if eq $e "none" }}
+              off: none
+{{- else }}
+              {{ $e }}: {{ $e }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
