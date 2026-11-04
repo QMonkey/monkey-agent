@@ -42,7 +42,8 @@ checkhealth_agent_opencode() {
 		rc=1
 	fi
 
-	llm_health opencode OPENCODE_LLM_API_KEY OPENCODE_LLM_BASE_URL OPENCODE_LLM_MODEL "" " The rendered opencode.json will then have empty fields."
+	llm_health opencode OPENCODE_LLM_API_KEY OPENCODE_LLM_BASE_URL OPENCODE_LLM_MODEL "" " The rendered opencode.json will then have empty fields." \
+		"$HOME/.config/agent/opencode/opencode.json" json:provider.llm.models
 
 	return "$rc"
 }
