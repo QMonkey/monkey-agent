@@ -1,15 +1,26 @@
 {
-  $__QWEN_LLM_EFFORT__
-  "approvalMode": "auto",
+  "$version": 4,
+  "tools": {
+    "approvalMode": "default"
+  },
+  "permissions": {
+    "allow": ["run_shell_command", "monitor", "write_file", "edit", "read_file"],
+    "ask": ["run_shell_command(tmux kill-server*)"]
+  },
   "modelProviders": {
     "openai": [
+{{- if ne .Env.QWEN_LLM_MODEL_ROWS "" }}
+{{- range $i, $r := (strings.Split "\n" .Env.QWEN_LLM_MODEL_ROWS) }}{{ $f := (strings.Split "|" $r) }}
+{{- if ne $i 0 }},{{ end }}
       {
-        "id": "$__QWEN_LLM_MODEL__",
-        "name": "$__QWEN_LLM_MODEL__",
-        "baseUrl": "$__QWEN_LLM_BASE_URL__",
-        "envKey": "QWEN_LLM_API_KEY",
-        "contextWindowSize": $__QWEN_LLM_CTX__
+        "id": {{ toJSON (index $f 0) }},
+        "name": {{ toJSON (index $f 0) }},
+        "baseUrl": {{ toJSON $.Env.QWEN_LLM_BASE_URL }},
+        "envKey": {{ toJSON $.Env.QWEN_LLM_API_KEY_ENV_NAME }},
+        "contextWindowSize": {{ index $f 1 }}
       }
+{{- end }}
+{{- end }}
     ]
   },
   "security": {
@@ -18,9 +29,50 @@
     }
   },
   "model": {
-    "name": "$__QWEN_LLM_MODEL__"
+    "name": {{ toJSON .Env.QWEN_LLM_MODEL }}
+{{- if ne .Env.QWEN_LLM_EFFORT "" }},
+    "reasoningEffort": {{ toJSON .Env.QWEN_LLM_EFFORT }}
+{{- end }}
   },
   "channels": {
-    $__QWEN_CHANNELS__
+{{- if eq .Env.QWEN_CHANNEL_QQ "1" }}
+    "qq-main": {
+      "type": "qq",
+      "approvalMode": "default",
+      "appID": "$QWEN_QQ_APP_ID",
+      "appSecret": "$QWEN_QQ_APP_SECRET",
+      "sandbox": true,
+      "privatePolicy": "open",
+      "sessionScope": "thread",
+      "cwd": {{ toJSON .Env.QWEN_CHANNEL_CWD }},
+      "instructions": "You are a concise coding assistant responding via QQ Bot.",
+      "groupPolicy": "disabled",
+      "groups": {
+        "*": {
+          "requireMention": true
+        }
+      }
+    }{{ if and (eq .Env.QWEN_CHANNEL_QQ "1") (eq .Env.QWEN_CHANNEL_DINGTALK "1") }},{{ end }}
+{{- end }}
+{{- if eq .Env.QWEN_CHANNEL_DINGTALK "1" }}
+    "dingtalk-main": {
+      "type": "dingtalk",
+      "approvalMode": "default",
+      "clientId": "$QWEN_DINGTALK_ACCESS_TOKEN",
+      "clientSecret": "$QWEN_DINGTALK_SECRET",
+      "useConnectionManager": true,
+      "privatePolicy": "open",
+      "sessionScope": "user",
+      "cwd": {{ toJSON .Env.QWEN_CHANNEL_CWD }},
+      "instructions": "You are a concise coding assistant responding via DingTalk.",
+      "groupPolicy": "open",
+      "atSender": true,
+      "groups": {
+        "*": {
+          "requireMention": true
+        }
+      }
+    }
+{{- end }}
   }
 }
