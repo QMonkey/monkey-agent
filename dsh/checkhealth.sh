@@ -91,7 +91,8 @@ checkhealth_agent_dsh() {
 		rc=1
 	fi
 
-	llm_health dsh DSH_LLM_API_KEY DSH_LLM_BASE_URL DSH_LLM_MODEL "" ""
+	llm_health dsh DSH_LLM_API_KEY DSH_LLM_BASE_URL DSH_LLM_MODEL "" "" "" \
+		"$HOME/.config/agent/dsh/cordis.patch.yml" yaml-ids
 
 	return "$rc"
 }
