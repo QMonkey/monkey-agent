@@ -8,23 +8,30 @@
       "npm": "@ai-sdk/openai-compatible",
       "name": "LLM Gateway",
       "options": {
-        "baseURL": "$__OPENCODE_LLM_BASE_URL__",
-        "apiKey": "{env:$__OPENCODE_LLM_API_KEY_ENV_NAME__}"
+        "baseURL": {{ .Env.OPENCODE_LLM_BASE_URL | toJSON }},
+        "apiKey": "{env:{{ .Env.OPENCODE_LLM_API_KEY_ENV_NAME }}}"
       },
       "models": {
-        "$__OPENCODE_LLM_MODEL__": {
-          "name": "$__OPENCODE_LLM_MODEL__",
-          "reasoning": true,
-          $__OPENCODE_LLM_EFFORT__
+{{- if ne .Env.OPENCODE_LLM_MODEL_ROWS "" }}
+{{- range $i, $r := (strings.Split "\n" .Env.OPENCODE_LLM_MODEL_ROWS) }}{{ $f := (strings.Split "|" $r) }}
+{{- if ne $i 0 }},{{ end }}
+        {{ index $f 0 | toJSON }}: {
+          "name": {{ index $f 0 | toJSON }},
+          "reasoning": {{ if ne (index $f 3) "-" }}true{{ else }}false{{ end }},
+{{- if ne (index $f 4) "" }}
+          "options": { "reasoningEffort": {{ index $f 4 | toJSON }} },
+{{- end }}
           "limit": {
-            "context": $__OPENCODE_LLM_CTX__,
-            "output": $__OPENCODE_LLM_OUT__
+            "context": {{ index $f 1 }},
+            "output": {{ index $f 2 }}
           }
         }
+{{- end }}
+{{- end }}
       }
     }
   },
-  "model": "llm/$__OPENCODE_LLM_MODEL__",
+  "model": "llm/{{ .Env.OPENCODE_LLM_MODEL }}",
   "permission": {
     "read": "allow",
     "external_directory": {
