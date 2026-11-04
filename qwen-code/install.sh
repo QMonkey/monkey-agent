@@ -82,7 +82,7 @@ _qwen_register_services_linux() {
 	qwen_bin=$(command -v qwen)
 	local unit_dir="$HOME/.config/systemd/user"
 	mkdir -p "$unit_dir"
-	export QWEN_BIN="$qwen_bin" QWEN_SERVE_AUTH_FLAG="$serve_auth_flag"
+	export QWEN_BIN="$qwen_bin" QWEN_SERVE_AUTH_FLAG="$serve_auth_flag" QWEN_CHANNEL_ARGS="$channel_args"
 	render \
 		"$AGENT_REPO_ROOT/qwen-code/service/qwen-serve.service.template" \
 		"$unit_dir/qwen-serve.service" || rc=$?
@@ -129,7 +129,7 @@ _qwen_register_services_macos() {
 	uid=$(id -u)
 	# The plist's PATH (launchd does not read shell profiles): the user's
 	# actual PATH, frozen at install — re-run install after PATH changes.
-	export QWEN_BIN="$(command -v qwen)" QWEN_SERVICE_PATH="$PATH" QWEN_SERVE_AUTH_FLAG="$serve_auth_flag"
+	export QWEN_BIN="$(command -v qwen)" QWEN_SERVICE_PATH="$PATH" QWEN_SERVE_AUTH_FLAG="$serve_auth_flag" QWEN_CHANNEL_ARGS="$channel_args"
 	render \
 		"$AGENT_REPO_ROOT/qwen-code/service/com.qwenlm.qwen-serve.plist.template" \
 		"$agents_dir/$label.plist" || rc=$?
@@ -180,104 +180,76 @@ install_agent_qwen_code() {
 		warn "QWEN_SERVER_TOKEN is not set — the serve daemon will run token-less: any local process that can reach 127.0.0.1:4170 can use the full operator API, including executing code as the daemon user. Set QWEN_SERVER_TOKEN and re-run to enable --require-auth."
 	fi
 
-	# The QQ + DingTalk channels are INLINED in settings.json.template.
-	# The only dynamic value is the channel working directory, JSON-escaped
-	# here for its embedded-string placeholder: backslash + quote (a
-	# workspace path has no control chars).
-	qwen_cwd_esc="$HOME"
-	qwen_cwd_esc=${qwen_cwd_esc//\\/\\\\}
-	qwen_cwd_esc=${qwen_cwd_esc//\"/\\\"}
-
-	# settings.json: render is a pure envsubst engine — it cannot apply
-	#    the §4.2 per-field override precedence itself, so the effective
-	#    values are resolved here and exported (the real secrets.env stays
-	#    untouched). Base URL and model are VALUES (public Qwen
-	#    endpoint/model by default, machine-local otherwise); the API key
-	#    renders as a NAME only (envKey indirection — token security, see
-	#    the header above; never values in settings.json).
+	# settings.json is rendered by gomplate, so §4.2's per-field override
+	# precedence still resolves here — the template only sees resolved values, and
+	# the API key reaches it as a NAME (envKey indirection; never values in
+	# settings.json). Channel members and the optional reasoningEffort key are
+	# structure and live in the template; the working directory is exported raw
+	# because the template JSON-escapes it with toJSON.
+	local eff_key_name="LLM_API_KEY"
+	if [ -n "$(secret QWEN_LLM_API_KEY 2>/dev/null)" ]; then
+		eff_key_name="QWEN_LLM_API_KEY"
+	fi
 	local eff_base eff_model
 	eff_base=$(secret QWEN_LLM_BASE_URL LLM_BASE_URL 2>/dev/null)
 	eff_model=$(secret QWEN_LLM_MODEL LLM_MODEL 2>/dev/null)
 	if [ -z "$(secret QWEN_LLM_API_KEY 2>/dev/null)" ] && [ -z "$(secret LLM_API_KEY 2>/dev/null)" ]; then
 		info "LLM_API_KEY / QWEN_LLM_API_KEY not set — the config references an empty variable; fill ${SECRETS_FILE#"$HOME"/} and re-run."
 	fi
-	# Model capability limit (contextWindowSize): resolved from models.dev
-	# against the EFFECTIVE model (see resolve_llm_model_caps in lib/agent.sh); a miss
-	# lands on the conservative 128000 floor.
-	# Effort (settings' model.reasoningEffort): only when the model's
-	# reasoning_options (models.dev) declare a safe tier (high, else
-	# xhigh) — qwen-code clamps to the model's ladder on top of this.
-	local eff_ctx eff_out eff_efforts eff_pick eff_effort_fragment=""
-	read -r eff_ctx eff_out eff_efforts <<<"$(resolve_llm_model_caps "$eff_model")"
+	# Model catalog: one "id|context|output|efforts|pick" row per model
+	# (llm_model_rows) — the template renders the provider entries from it.
+	# reasoningEffort is a bare VALUE, not a fragment: the template owns the
+	# key and its comma, so a second root-level "model" can no longer win
+	# last-one-wins and silently drop the effort.
+	local model_rows eff_efforts eff_pick
+	model_rows=$(llm_model_rows "$eff_model")
+	eff_efforts=$(resolve_llm_model_caps "$eff_model" | awk 'NR==1 { print $4 }')
 	eff_pick=$(pick_reasoning_effort "$eff_efforts")
-	[ -n "$eff_pick" ] && eff_effort_fragment='"model": { "reasoningEffort": "'"$eff_pick"'" },'
-	# The channels object is built member-by-member, gated on each
-	# channel's credentials: the channel worker validates every configured
-	# channel at startup and EXITS on the first empty credential, killing
-	# every other channel with it (--channel all runs all configured
-	# channels). No credentials -> "channels": {} -> the daemon boots
-	# clean with zero channels.
-	local channels_json="" qq_fragment="" dt_fragment=""
-	local qq_id qq_secret dt_token dt_secret
-	qq_id=$(secret QWEN_QQ_APP_ID 2>/dev/null)
-	qq_secret=$(secret QWEN_QQ_APP_SECRET 2>/dev/null)
-	if [ -n "$qq_id" ] && [ -n "$qq_secret" ]; then
-		qq_fragment='"qq-main": {
-      "type": "qq",
-      "appID": "$QWEN_QQ_APP_ID",
-      "appSecret": "$QWEN_QQ_APP_SECRET",
-      "sandbox": true,
-      "privatePolicy": "open",
-      "sessionScope": "thread",
-      "cwd": "'"$HOME"'",
-      "instructions": "You are a concise coding assistant responding via QQ Bot.",
-      "groupPolicy": "disabled",
-      "groups": {
-        "*": {
-          "requireMention": true
-        }
-      }
-    }'
-	fi
-	dt_token=$(secret QWEN_DINGTALK_ACCESS_TOKEN 2>/dev/null)
-	dt_secret=$(secret QWEN_DINGTALK_SECRET 2>/dev/null)
-	if [ -n "$dt_token" ] && [ -n "$dt_secret" ]; then
-		dt_fragment='    "dingtalk-main": {
-      "type": "dingtalk",
-      "clientId": "$QWEN_DINGTALK_ACCESS_TOKEN",
-      "clientSecret": "$QWEN_DINGTALK_SECRET",
-      "useConnectionManager": true,
-      "privatePolicy": "open",
-      "sessionScope": "user",
-      "cwd": "'"$HOME"'",
-      "instructions": "You are a concise coding assistant responding via DingTalk.",
-      "groupPolicy": "open",
-      "atSender": true,
-      "groups": {
-        "*": {
-          "requireMention": true
-        }
-      }
-    }'
-	fi
-	if [ -n "$qq_fragment" ]; then
-		channels_json="$qq_fragment"
-		[ -n "$dt_fragment" ] && channels_json="$channels_json,
-$dt_fragment"
-	elif [ -n "$dt_fragment" ]; then
-		channels_json="$dt_fragment"
-	fi
-	channels_json="${channels_json:+$channels_json}"
+	# Channel gate flags: the channel worker validates every configured
+	# channel at startup and EXITS on the first empty credential, killing the
+	# rest with it. No credentials -> "channels": {} -> the daemon boots clean.
+	# The flags carry NO secret values — the template embeds the credential
+	# NAME ($QWEN_QQ_APP_ID) and the agent resolves it from secrets.env at boot.
+	local chan_qq="" chan_dingtalk="" channel_args=""
+	if [ -n "$(secret QWEN_QQ_APP_ID 2>/dev/null)" ] && [ -n "$(secret QWEN_QQ_APP_SECRET 2>/dev/null)" ]; then chan_qq=1; fi
+	if [ -n "$(secret QWEN_DINGTALK_ACCESS_TOKEN 2>/dev/null)" ] && [ -n "$(secret QWEN_DINGTALK_SECRET 2>/dev/null)" ]; then chan_dingtalk=1; fi
+	# The --channel argument follows the gates above: --channel all only when
+	# at least one channel is configured — a bare --channel with zero
+	# channels starts a worker that has nothing to run.
+	[ -n "$chan_qq$chan_dingtalk" ] && channel_args=" --channel all"
 
+	# The subshell is not for `|| rc=$?` (identical either way): it bounds these
+	# exports. This hook also renders the service unit, whose template reads some
+	# of the SAME names, so a leaked export would let a later render fill a missing
+	# reference from an earlier value instead of aborting. Keep the parentheses.
 	(
-		# The RESOLVED override-layer values are exported here.
+		# Only resolved VALUES are exported. Every reference the template
+		# reads must be exported, empty included — gomplate aborts the render
+		# on an unset one and reports the offending names.
 		export QWEN_LLM_BASE_URL="$eff_base" QWEN_LLM_MODEL="$eff_model" \
-			QWEN_LLM_CTX="$eff_ctx" QWEN_LLM_EFFORT="$eff_effort_fragment"
-		export QWEN_CHANNEL_CWD="$qwen_cwd_esc" QWEN_CHANNELS="$channels_json"
+			QWEN_LLM_API_KEY_ENV_NAME="$eff_key_name" \
+			QWEN_LLM_MODEL_ROWS="$model_rows" QWEN_LLM_EFFORT="${eff_pick:-}"
+		# The --channel argument is NOT part of the config contract: only the
+		# service unit reads it (see the register helpers), so settings.json does
+		# not get it exported here — the two gate flags above are its inputs.
+		export QWEN_CHANNEL_CWD="$HOME" QWEN_CHANNEL_QQ="$chan_qq" QWEN_CHANNEL_DINGTALK="$chan_dingtalk"
 		render \
 			"$AGENT_REPO_ROOT/qwen-code/settings.json.template" \
 			"$AGENT_HOME/qwen/settings.json"
 	) || rc=$?
+	# The gate flags and the unit's --channel all are two views of one fact;
+	# drift would start a channel worker with nothing to run (or refuse one
+	# it has). Check the rendered config rather than trusting both.
+	if [ -f "$AGENT_HOME/qwen/settings.json" ]; then
+		local n_chan
+		n_chan=$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["channels"]))' \
+			"$AGENT_HOME/qwen/settings.json" 2>/dev/null) || n_chan=""
+		if [ -n "$n_chan" ] && [ "$n_chan" -gt 0 ] && [ -z "$channel_args" ]; then
+			record_agent_failure "qwen-code: settings.json renders ${n_chan} channel(s) but the service starts without --channel all — re-run the install"
+		elif [ "${n_chan:-0}" -eq 0 ] && [ -n "$channel_args" ]; then
+			record_agent_failure "qwen-code: service passes --channel all but settings.json renders no channel — re-run the install"
+		fi
+	fi
 	if [ -f "$AGENT_HOME/qwen/settings.json" ]; then
 		mkdir -p "$HOME/.qwen"
 		link_config "$AGENT_HOME/qwen/settings.json" "$HOME/.qwen/settings.json" takeover || rc=$?
