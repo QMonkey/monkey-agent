@@ -1,28 +1,23 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
-# qwen-code/install.sh — the Qwen Code agent hook. Sourced by the entry
-# points via run_agent_hook: defines install_agent_qwen_code() and NOTHING
-# ELSE executes at source time (no top-level commands — only function
-# definitions).
+# qwen-code/install.sh — the Qwen Code agent hook, sourced through
+# run_agent_hook: defines install_agent_qwen_code() and nothing else runs
+# at source time. Docs: https://qwenlm.github.io/qwen-code-docs/ (npm
+# @qwen-code/qwen-code, bin `qwen`, Node.js 22+).
 #
-# Research (official docs https://qwenlm.github.io/qwen-code-docs/):
-#   - Package: npm @qwen-code/qwen-code (bin: `qwen`). Node.js 22+ required.
-#   - Credentials: the single 0600 secrets.env (sourced by interactive
-#     shells via .zprofile AND fed to the resident daemon via the unit's
-#     EnvironmentFile=) — one credential store, no per-agent copies.
-#     settings.json references the variables BY NAME (modelProviders
-#     envKey + channels $VAR form); token security mandates indirection,
-#     never values in settings.json.
-#   - Channels (DingTalk Stream-mode bot + QQ Bot, both OUTBOUND
-#     WebSocket, inlined in settings.json.template) + the ONE resident
-#     daemon `qwen serve --channel` (qwen-serve: loopback API + channel
-#     adapters in a single process) — systemd user unit / launchd plist
-#     under service/.
-#
-# _qwen_install_binary — make sure `qwen` exists: Node.js 22+ and npm via
-# the framework package manager when missing, then the pinned npm global
-# install. Idempotent: a present binary short-circuits. Returns non-zero on
-# a real failure (caller's hook wrapper collects it).
+# Pitfalls this file encodes:
+#   - One credential store: the 0600 secrets.env — .zprofile sources it for
+#     shells, the unit's EnvironmentFile= for the daemon. settings.json
+#     references variables BY NAME (modelProviders envKey, channels $VAR);
+#     token security means indirection, never values in the file.
+#   - ONE resident daemon: `qwen serve --channel` hosts the loopback
+#     HTTP/SSE API (127.0.0.1:4170) and the channel adapters in one
+#     process; DingTalk (Stream mode) and QQ Bot are both OUTBOUND
+#     WebSocket and are inlined in settings.json.template. Two daemons, or
+#     a --channel flag with zero channels, is the failure mode to avoid.
+#   - A unit/plist render failure must skip registration entirely (see the
+#     register helpers): a stale unit would otherwise be loaded and restarted
+#     into a crash loop.
 _qwen_install_binary() {
 	if have_native_cmd qwen; then
 		ok "qwen already installed."
@@ -82,10 +77,14 @@ _qwen_register_services_linux() {
 	qwen_bin=$(command -v qwen)
 	local unit_dir="$HOME/.config/systemd/user"
 	mkdir -p "$unit_dir"
-	export QWEN_BIN="$qwen_bin" QWEN_SERVE_AUTH_FLAG="$serve_auth_flag" QWEN_CHANNEL_ARGS="$channel_args"
-	render \
-		"$AGENT_REPO_ROOT/qwen-code/service/qwen-serve.service.template" \
-		"$unit_dir/qwen-serve.service" || rc=$?
+	# The subshell bounds these exports (as at every render site): a leaked
+	# value would let a later render fill a missing reference silently.
+	(
+		export QWEN_BIN="$qwen_bin" QWEN_SERVE_AUTH_FLAG="$serve_auth_flag" QWEN_CHANNEL_ARGS="$channel_args"
+		render \
+			"$AGENT_REPO_ROOT/qwen-code/service/qwen-serve.service.template" \
+			"$unit_dir/qwen-serve.service"
+	) || rc=$?
 	if [ "$rc" -ne 0 ]; then
 		warn "service unit render failed — skipping daemon-reload + enable --now (a stale/broken unit would register). Fix the render error above and re-run, or: systemctl --user daemon-reload && systemctl --user enable --now qwen-serve.service"
 		return "$rc"
@@ -129,10 +128,14 @@ _qwen_register_services_macos() {
 	uid=$(id -u)
 	# The plist's PATH (launchd does not read shell profiles): the user's
 	# actual PATH, frozen at install — re-run install after PATH changes.
-	export QWEN_BIN="$(command -v qwen)" QWEN_SERVICE_PATH="$PATH" QWEN_SERVE_AUTH_FLAG="$serve_auth_flag" QWEN_CHANNEL_ARGS="$channel_args"
-	render \
-		"$AGENT_REPO_ROOT/qwen-code/service/com.qwenlm.qwen-serve.plist.template" \
-		"$agents_dir/$label.plist" || rc=$?
+	# The subshell bounds these exports (as at every render site): a leaked
+	# value would let a later render fill a missing reference silently.
+	(
+		export QWEN_BIN="$(command -v qwen)" QWEN_SERVICE_PATH="$PATH" QWEN_SERVE_AUTH_FLAG="$serve_auth_flag" QWEN_CHANNEL_ARGS="$channel_args"
+		render \
+			"$AGENT_REPO_ROOT/qwen-code/service/com.qwenlm.qwen-serve.plist.template" \
+			"$agents_dir/$label.plist"
+	) || rc=$?
 	if [ "$rc" -ne 0 ]; then
 		warn "$label.plist render failed — skipping bootout + bootstrap (a stale/broken plist would register). Fix the render error above and re-run, or: launchctl bootstrap gui/$uid $agents_dir/$label.plist"
 		return "$rc"
