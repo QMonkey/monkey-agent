@@ -77,6 +77,7 @@ OPTIONAL_CHECKS=(
 # WARN, never a failure.
 checkhealth_extra() {
 	local agent
+	secrets_egress_guard
 	for agent in ${ENABLED_AGENTS[@]+"${ENABLED_AGENTS[@]}"}; do
 		run_agent_hook checkhealth "$agent"
 	done
