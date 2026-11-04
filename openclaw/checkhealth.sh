@@ -18,7 +18,7 @@
 #      the optional gateway control-plane token — WARN if empty)
 #   5. gateway status     (`openclaw gateway status` when the binary
 #      exists — WARN if it reports problems; the daemon listens on
-#      127.0.0.1:18789)
+#      127.0.0.1:18790)
 #   6. resident service   (openclaw-gateway.service alive via
 #      `systemctl --user is-active`, or launchctl print on macOS; WARN if
 #      not registered or not active — advisory, collected failures only)
@@ -155,7 +155,7 @@ checkhealth_agent_openclaw() {
 	if [ -n "$(secret OPENCLAW_GATEWAY_TOKEN 2>/dev/null)" ]; then
 		ok "Gateway control-plane token is set (token-auth posture)."
 	else
-		warn "OPENCLAW_GATEWAY_TOKEN is empty — the gateway runs token-less: any local process that can reach 127.0.0.1:18789 can drive the assistant (dashboard + full agent API); advisory only."
+		warn "OPENCLAW_GATEWAY_TOKEN is empty — the gateway runs token-less: any local process that can reach 127.0.0.1:18790 can drive the assistant (dashboard + full agent API); advisory only."
 	fi
 
 	# Gateway status (WARN-level: `openclaw gateway status` reports the
