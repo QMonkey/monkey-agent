@@ -144,6 +144,8 @@ _openclaw_register_services_linux() {
 	# its documented global fallback env source).
 	local rc=0 openclaw_bin
 	openclaw_bin=$(command -v openclaw)
+	local unit_dir="$HOME/.config/systemd/user"
+	mkdir -p "$unit_dir"
 	# The subshell bounds these exports (as at every render site): a leaked
 	# value would let a later render fill a missing reference silently.
 	(
@@ -199,6 +201,9 @@ _openclaw_register_services_macos() {
 	# actual PATH, frozen at install — re-run install after PATH changes.
 	local openclaw_bin
 	openclaw_bin=$(command -v openclaw)
+	local agents_dir="$HOME/Library/LaunchAgents"
+	mkdir -p "$agents_dir"
+	uid=$(id -u)
 	# The subshell bounds these exports (as at every render site): a leaked
 	# value would let a later render fill a missing reference silently.
 	(
