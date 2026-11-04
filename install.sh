@@ -158,23 +158,32 @@ install_shared_secrets() {
 	if [ -n "$generated" ]; then
 		info "Auto-generated daemon tokens:$generated (openssl rand -hex 32; rotate by hand in ${SECRETS_FILE#"$HOME"/})."
 	fi
-	# NO_PROXY default: the template's value only seeds a FRESH file; an
-	# existing file missing the key would otherwise fill from the (unset)
-	# environment and render empty — and an empty NO_PROXY with a proxy set
-	# pushes even loopback traffic (the gateway's own WS/UI binds) through
-	# the proxy.
-	export NO_PROXY="${NO_PROXY:-localhost,127.0.0.1,::1}"
+	# NO_PROXY is ADDITIVE by nature (exclusions only grow): the caller's
+	# entries keep their order and the loopback binds are appended only when
+	# missing. This merge is the ONLY source of that floor — the template
+	# leaves the line empty so fill mode takes this value instead of a seeded
+	# default — so it must stay ahead of write_secrets_template below.
+	# checkhealth re-asserts the floor on the rendered file.
+	local _np="${NO_PROXY:-}" _d
+	for _d in localhost 127.0.0.1 ::1; do
+		case ",$_np," in
+		*,"$_d,"*) ;;
+		*) _np="${_np:+$_np,}$_d" ;;
+		esac
+	done
+	export NO_PROXY="$_np"
 	write_secrets_template \
-		LLM_API_KEY LLM_BASE_URL LLM_MODEL \
+		LLM_API_KEY LLM_BASE_URL LLM_MODEL LLM_MODELS \
 		OPENCODE_LLM_API_KEY OPENCODE_LLM_BASE_URL OPENCODE_LLM_MODEL \
 		DSH_LLM_API_KEY DSH_LLM_BASE_URL DSH_LLM_MODEL \
 		QWEN_LLM_API_KEY QWEN_LLM_BASE_URL QWEN_LLM_MODEL \
-		QWEN_DINGTALK_ACCESS_TOKEN QWEN_DINGTALK_SECRET QWEN_SERVER_TOKEN \
-		QWEN_QQ_APP_ID QWEN_QQ_APP_SECRET \
 		OPENCLAW_LLM_API_KEY OPENCLAW_LLM_BASE_URL OPENCLAW_LLM_MODEL \
+		QWEN_QQ_APP_ID QWEN_QQ_APP_SECRET \
+		QWEN_DINGTALK_ACCESS_TOKEN QWEN_DINGTALK_SECRET QWEN_SERVER_TOKEN \
 		OPENCLAW_DINGTALK_ACCESS_TOKEN OPENCLAW_DINGTALK_SECRET \
 		OPENCLAW_QQ_APP_ID OPENCLAW_QQ_CLIENT_SECRET OPENCLAW_QQ_ALLOW_FROM \
-		HTTPS_PROXY HTTP_PROXY NO_PROXY OPENCLAW_GATEWAY_TOKEN
+		OPENCLAW_GATEWAY_TOKEN \
+		HTTPS_PROXY HTTP_PROXY NO_PROXY
 	wire_secrets_profile
 }
 
