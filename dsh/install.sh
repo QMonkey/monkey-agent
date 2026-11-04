@@ -1,33 +1,23 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
-# dsh/install.sh — the DeepSeek Harness agent hook. Sourced by the entry
-# points via run_agent_hook: defines install_agent_dsh() and NOTHING ELSE
-# executes at source time (no top-level commands — only function
-# definitions).
+# dsh/install.sh — the DeepSeek Harness agent hook, sourced through
+# run_agent_hook: defines install_agent_dsh() and nothing else runs at
+# source time.
 #
-# Research:
-#   - Package: npm @deepseek-ai/dsh (verified npm name; bin: `dsh`) — the
-#     docs' `npm install -g @deepseek-ai/dsh` is the same package with the
-#     `dsh` bin. Node.js 22+ required.
-#   - Plugin management (`dsh plugin`) forwards to pnpm — pnpm is
-#     provisioned automatically before any plugin install.
-#   - Web profile only (headless/GUI/TUI out of scope — design §4.4).
-#   - Config: ~/.dsh/profiles/web/cordis.patch.yml — read fresh on every
-#     request (config edits need no restart); one Cordis patch entry per
-#     plugin row. apiKeyEnv is the credential indirection: the KEY VALUE
-#     never enters the file, dsh resolves it from the process environment
-#     per request (secrets.env sourcing feeds the interactive shell).
-#   - Renderer: gomplate over {{ .Env.NAME }} references — values are
-#     quoted-scalar-safe (URLs/model ids/numbers), via the environment
-#     only, never argv.
-#   - Base URL / model id fall back to the OFFICIAL public endpoint (public
-#     information); a private endpoint or model id is a secret — set
-#     DSH_LLM_BASE_URL / DSH_LLM_MODEL (or the shared LLM_* layer).
-#
-# _dsh_install_binary — make sure `dsh` exists: Node.js 22+ and npm via the
-# framework package manager when missing, then the pinned npm global
-# install. Idempotent: a present binary short-circuits. Returns non-zero on
-# a real failure (caller's hook wrapper collects it).
+# Facts this file depends on:
+#   - npm @deepseek-ai/dsh (bin `dsh`), Node.js 22+. `dsh plugin` forwards
+#     to pnpm, so pnpm is provisioned before any plugin install.
+#   - Web profile only (headless/GUI/TUI are out of scope — design §4.4);
+#     config at ~/.dsh/profiles/web/cordis.patch.yml, one Cordis patch entry
+#     per plugin row, re-read on every request (config edits need no restart).
+#   - apiKeyEnv is the credential indirection: the key VALUE never enters the
+#     file — dsh resolves it from the process environment per request.
+#   - Renderer is gomplate over {{ .Env.NAME }}; values reach it through the
+#     environment only (never argv) and are scalar-safe (URLs, model ids,
+#     numbers).
+#   - Base URL / model id default to the OFFICIAL public endpoint (public
+#     information); a private endpoint or model id is a secret and comes from
+#     DSH_LLM_BASE_URL / DSH_LLM_MODEL or the shared LLM_* layer.
 _dsh_install_binary() {
 	if have_native_cmd dsh; then
 		ok "dsh already installed."
