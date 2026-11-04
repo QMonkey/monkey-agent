@@ -1,88 +1,44 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
-# openclaw/install.sh — the OpenClaw agent hook. Sourced by the entry
-# points via run_agent_hook: defines install_agent_openclaw() and NOTHING
-# ELSE executes at source time (no top-level commands — only function
-# definitions).
+# openclaw/install.sh — the OpenClaw agent hook, sourced through
+# run_agent_hook: defines install_agent_openclaw() and nothing else runs at
+# source time.
 #
-# What install does:
-#   1. registers the secrets template vars this agent owns (idempotent
-#      merge), including the OPTIONAL gateway control-plane token
-#   2. makes sure `openclaw` exists — Node.js 26.12+ floor (HIGHER
-#      than the other agents' 22+; this task owns the bump path: NodeSource
-#      on Linux, brew on macOS, WARN+skip when impossible rather than
-#      breaking the other agents' Node 22), then the pinned npm global
-#      install (npm 11.16+/12 needs --allow-scripts=openclaw; older npm
-#      must NOT get the flag), falling back to the official installer
-#      script with --no-onboard
-#   3. installs the official DingTalk channel plugin (DingTalk is NOT a
-#      core channel; the channel member is inlined in config.template)
-#   4. renders openclaw/config.template → ~/.openclaw/openclaw.json
-#      (regular-file COPY, not a symlink — upstream atomically renames
-#      onto the config path and explicitly says to avoid symlinked
-#      layouts; "Config template findings" in this header) — the config-only,
-#      non-interactive equivalent of `openclaw onboard`: valid config +
-#      gateway service is the documented automation path
-#   5. credentials: the single 0600 secrets.env (see install_shared_secrets)
-#      — the documented global fallback env source the Gateway auto-loads
-#   6. registers the gateway as a systemd user service (Linux) / launchd
-#      agent (macOS), best-effort, WARN + skip where no user session
-#      exists (WSL/containers) or launchctl is unavailable
+# Install steps: register this agent's secrets vars (incl. the OPTIONAL
+# gateway token) → ensure the binary (Node floor HIGHER than the other
+# agents; this file owns the bump path: NodeSource on Linux, brew on macOS,
+# WARN+skip rather than breaking the family's Node 22) → install the official
+# DingTalk plugin (DingTalk is NOT a core channel) → render config →
+# register the gateway service (WARN + skip without a systemd user session,
+# e.g. WSL/containers).
 #
-# Secret posture (research-pinned, see template headers):
-#   - No secret value is ever rendered into openclaw.json: the LLM key,
-#     the DingTalk clientId/clientSecret and the gateway token use
-#     OpenClaw's native `${VAR}` config substitution (documented); the
-#     values reach the Gateway through its own env loading (the service
-#     unit's EnvironmentFile= hands over secrets.env explicitly).
-#   - Every value reaches a renderer through the environment only — the
-#     callers resolve values via secret() and export them, never a command
-#     line argument.
-#   - DingTalk channel: the official plugin @dingtalk-real-ai/dingtalk-
-#     connector (requires >= 2026.8.1), installed before the config render;
-#     fields clientId (AppKey) / clientSecret (AppSecret) under
-#     channels."dingtalk-connector"; Stream Mode = outbound WebSocket, the
-#     plugin runs INSIDE the Gateway process (no separate resident to
-#     supervise).
-#
-# Binary install method, PINNED 2026-10-24 from
-# https://docs.openclaw.ai/install (npm tab) and
-# https://docs.openclaw.ai/start/getting-started:
-#   Node.js 26.12+ (Node 26 recommended), then
-#   `npm install -g openclaw@latest --allow-scripts=openclaw` on
-#   npm 12 / npm 11.16+, or the same command WITHOUT the flag on
-#   npm 11.15 and earlier; fallback: `curl -fsSL
-#   https://openclaw.ai/install.sh | bash -s -- --no-onboard'.
-#
-# Config template findings (pinned 2026-10-24, docs.openclaw.ai — the
-# deployed copy's comments do not survive upstream rewrites, which strip
-# JSON5 comments, so the knowledge lives here):
-#   - JSON5, strict schema validation: an unknown key makes the Gateway
-#     REFUSE TO START; regular JSON is accepted too.
-#   - models.providers.<id>: baseUrl / apiKey / api "openai-completions"
-#     plus a models[] list; the agent default model references the entry
-#     as "<provider>/<model-id>". ${VAR} substitution in config values is
-#     a documented feature — the template carries NAMES only, the values
-#     come from secrets.env (the documented global fallback env source).
-#   - gateway.auth is injected ONLY when OPENCLAW_GATEWAY_TOKEN is set;
-#     token-less on the loopback bind otherwise (the installer WARNs so
-#     the choice is informed — same posture as qwen's optional token).
-#   - "cron" (top level) enables the cron engine; individual scheduled
-#     jobs are runtime objects (openclaw automations add ...), never
-#     config keys. `openclaw gateway run` is the foreground process;
-#     startup config errors exit 78.
+# Pitfalls this file encodes:
+#   - The config is installed as a regular-file COPY at ~/.openclaw/openclaw.json,
+#     NOT a symlink: upstream renames atomically onto that path and warns
+#     against symlinked layouts.
+#   - No secret value is ever rendered: LLM key, DingTalk clientId/clientSecret
+#     and the gateway token use OpenClaw's `${VAR}` config substitution; the
+#     values arrive through the environment (the unit's EnvironmentFile=
+#     hands over secrets.env, which the Gateway also auto-loads).
+#   - Strict JSON5 schema: an unknown key makes the Gateway REFUSE TO START
+#     (config errors exit 78 on run). A channel key is legal only while its
+#     plugin is installed; gateway.auth is injected ONLY when
+#     OPENCLAW_GATEWAY_TOKEN is set (token-less loopback otherwise, WARNed).
+#   - `cron` (top level) only enables the engine; scheduled jobs are runtime
+#     objects (openclaw automations), never config keys.
+#   - DingTalk runs INSIDE the Gateway process (outbound WebSocket, plugin
+#     requires >= 2026.8.1) — there is no separate resident to supervise.
+#   - Because upstream rewrites strip the deployed config's comments, the
+#     schema knowledge above lives here, not in the file on disk.
+#   - Do NOT also run `openclaw gateway install`: two supervisors would
+# _openclaw_install_binary — make sure `openclaw` exists: Node 26.12+ (with
+# the bump path above when the distro Node is too old), npm, then the pinned
+# npm global install (flag per npm version), falling back to the official
+# installer script (--no-onboard: the non-interactive form). Idempotent: a
+# present binary short-circuits. Returns non-zero on a real failure (the
+# caller's hook wrapper collects it).
 
-# ──────────────────────── shared local helpers ────────────────────────
-# Local copies (dsh pattern): checkhealth sources the folder checkhealth.sh WITHOUT
-# install.sh, and install.sh is sourced standalone — nothing here may
-# depend on the other file's definitions.
-
-# _openclaw_install_binary — make sure `openclaw` exists: Node 26.12+
-# (with the bump path above when the distro Node is too old), npm,
-# then the pinned npm global install (flag per npm version), falling back
-# to the official installer script (--no-onboard: the non-interactive
-# form). Idempotent: a present binary short-circuits. Returns non-zero on
-# a real failure (caller's hook wrapper collects it).
+#     compete for the same state directory (see the register helpers).
 _openclaw_install_binary() {
 	if have_native_cmd openclaw; then
 		ok "openclaw already installed."
@@ -188,12 +144,14 @@ _openclaw_register_services_linux() {
 	# its documented global fallback env source).
 	local rc=0 openclaw_bin
 	openclaw_bin=$(command -v openclaw)
-	export OPENCLAW_BIN="$openclaw_bin" OPENCLAW_SERVICE_PATH="$PATH" OPENCLAW_CHANNEL_CWD="$HOME"
-	local unit_dir="$HOME/.config/systemd/user"
-	mkdir -p "$unit_dir"
-	render \
-		"$AGENT_REPO_ROOT/openclaw/service/openclaw-gateway.service.template" \
-		"$unit_dir/openclaw-gateway.service" || rc=$?
+	# The subshell bounds these exports (as at every render site): a leaked
+	# value would let a later render fill a missing reference silently.
+	(
+			export OPENCLAW_BIN="$openclaw_bin" OPENCLAW_SERVICE_PATH="$PATH" OPENCLAW_CHANNEL_CWD="$HOME"
+		render \
+			"$AGENT_REPO_ROOT/openclaw/service/openclaw-gateway.service.template" \
+			"$unit_dir/openclaw-gateway.service"
+	) || rc=$?
 	if [ "$rc" -ne 0 ]; then
 		warn "openclaw-gateway.service render failed — skipping daemon-reload + enable --now (a stale/broken unit would register). Fix the render error above and re-run, or: systemctl --user daemon-reload && systemctl --user enable --now openclaw-gateway.service"
 		return "$rc"
@@ -241,13 +199,14 @@ _openclaw_register_services_macos() {
 	# actual PATH, frozen at install — re-run install after PATH changes.
 	local openclaw_bin
 	openclaw_bin=$(command -v openclaw)
-	export OPENCLAW_BIN="$openclaw_bin" OPENCLAW_SERVICE_PATH="$PATH" OPENCLAW_CHANNEL_CWD="$HOME"
-	local agents_dir="$HOME/Library/LaunchAgents"
-	mkdir -p "$agents_dir"
-	uid=$(id -u)
-	render \
-		"$AGENT_REPO_ROOT/openclaw/service/$label.plist.template" \
-		"$agents_dir/$label.plist" || rc=$?
+	# The subshell bounds these exports (as at every render site): a leaked
+	# value would let a later render fill a missing reference silently.
+	(
+			export OPENCLAW_BIN="$openclaw_bin" OPENCLAW_SERVICE_PATH="$PATH" OPENCLAW_CHANNEL_CWD="$HOME"
+		render \
+			"$AGENT_REPO_ROOT/openclaw/service/$label.plist.template" \
+			"$agents_dir/$label.plist"
+	) || rc=$?
 	if [ "$rc" -ne 0 ]; then
 		warn "$label.plist render failed — skipping bootout + bootstrap (a stale/broken plist would register). Fix the render error above and re-run, or: launchctl bootstrap gui/$uid $agents_dir/$label.plist"
 		return "$rc"
@@ -336,7 +295,7 @@ install_agent_openclaw() {
 		gateway_auth=1
 		ok "OPENCLAW_GATEWAY_TOKEN is set — the gateway boots with token auth."
 	else
-		warn "OPENCLAW_GATEWAY_TOKEN is not set — the gateway will run token-less: any local process that can reach 127.0.0.1:18789 can drive the assistant (dashboard + full agent API). Set OPENCLAW_GATEWAY_TOKEN and re-run to enable gateway.auth token mode."
+		warn "OPENCLAW_GATEWAY_TOKEN is not set — the gateway will run token-less: any local process that can reach 127.0.0.1:18790 can drive the assistant (dashboard + full agent API). Set OPENCLAW_GATEWAY_TOKEN and re-run to enable gateway.auth token mode."
 	fi
 	if [ -z "$(secret OPENCLAW_DINGTALK_ACCESS_TOKEN 2>/dev/null)" ] || [ -z "$(secret OPENCLAW_DINGTALK_SECRET 2>/dev/null)" ]; then
 		info "DingTalk credentials not set — the dingtalk-connector channel will not connect; fill OPENCLAW_DINGTALK_* in ${SECRETS_FILE#"$HOME"/} and restart the service."
@@ -373,7 +332,6 @@ install_agent_openclaw() {
 		export OPENCLAW_WORKSPACE="$HOME/.openclaw/workspace" \
 			OPENCLAW_LLM_API_KEY_ENV_NAME="$eff_key_name" \
 			OPENCLAW_LLM_BASE_URL="$eff_base" \
-			OPENCLAW_LLM_MODEL="$eff_model" \
 			OPENCLAW_PRIMARY_MODEL="custom/$eff_model" \
 			OPENCLAW_GATEWAY_AUTH="$gateway_auth" \
 			OPENCLAW_LLM_MODEL_ROWS="$model_rows" \
