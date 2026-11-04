@@ -25,14 +25,14 @@
   <array>
     <string>/bin/sh</string>
     <string>-c</string>
-    <string>. '$__HOME__/.config/agent/secrets.env' || exit 1; exec '$__OPENCLAW_BIN__' gateway run</string>
+    <string>. '{{ .Env.HOME }}/.config/agent/secrets.env' || exit 1; exec '{{ .Env.OPENCLAW_BIN }}' gateway run</string>
   </array>
   <key>WorkingDirectory</key>
-  <string>$__OPENCLAW_CHANNEL_CWD__</string>
+  <string>{{ .Env.OPENCLAW_CHANNEL_CWD }}</string>
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key>
-    <string>$__OPENCLAW_SERVICE_PATH__</string>
+    <string>{{ .Env.OPENCLAW_SERVICE_PATH }}</string>
   </dict>
   <key>RunAtLoad</key>
   <true/>
@@ -44,8 +44,8 @@
   <key>ThrottleInterval</key>
   <integer>10</integer>
   <key>StandardOutPath</key>
-  <string>$__HOME__/Library/Logs/openclaw-gateway/out.log</string>
+  <string>{{ .Env.HOME }}/Library/Logs/openclaw-gateway/out.log</string>
   <key>StandardErrorPath</key>
-  <string>$__HOME__/Library/Logs/openclaw-gateway/err.log</string>
+  <string>{{ .Env.HOME }}/Library/Logs/openclaw-gateway/err.log</string>
 </dict>
 </plist>
