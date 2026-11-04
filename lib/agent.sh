@@ -220,69 +220,188 @@ wire_secrets_profile() {
 		'[[ -f "$HOME/.config/agent/secrets.env" ]] && { set -a; source "$HOME/.config/agent/secrets.env"; set +a; }' "head"
 }
 
-# resolve_llm_model_caps <model-id> — print "<context> <output> <efforts>" for the model from
-# models.dev (the metadata source opencode itself embeds for KNOWN
-# providers; a custom provider's models are invisible to it, so the agents
-# resolve and render the numbers themselves). Matching ladder, best-effort:
-#   1. vendor prefix: "zhipu/glm-5.3-flash" → a models.dev provider whose
-#      name starts with "zhipu" ("zhipuai") carrying the bare model id —
-#      the canonical vendor entry wins over third-party mirrors
-#   2. any provider carrying the full id or the bare id
-# Output falls back to the conservative 128000/32768 floor when the fetch
-# fails (offline) or nothing matches: a floor only costs early compaction
-# on big-window models, while an overshoot can 400 every request.
-# 20s ceiling: installs are interactive; models.dev answers in seconds.
+# models.dev catalog cache: fetched once per install process, shared by
+# every hook's capability resolution (in-memory only; no disk cache).
+_MODELSDEV_JSON=""
+
+# Function-first: retry's function-export path requires it (a bare
+# binary name would hit `export -f <binary>` errors in some shells).
+modelsdev_curl() {
+	curl -fsSL --max-time 20 https://models.dev/api.json 2>/dev/null
+}
+
+modelsdev_fetch() {
+	[ -n "$_MODELSDEV_JSON" ] && return 0
+	_MODELSDEV_JSON=$(retry -n 3 -d 2 -m 5 -t 30 -s "models.dev catalog" modelsdev_curl) || _MODELSDEV_JSON=""
+	return 0
+}
+
+# resolve_llm_model_caps <model-id>... — one line per id, in argument order,
+# resolved from the cached models.dev catalog (one fetch per batch):
+#
+#   "<id> <context> <output> <efforts>"
+#
+#   $ resolve_llm_model_caps zhipu/glm-5.3-flash qwen3-max nosuch/model
+#   zhipu/glm-5.3-flash 1000000 131072 low,high,max
+#   qwen3-max 262144 65536 -
+#   nosuch/model 128000 32768 -
+#
+# Two catalog paths are read, nothing else: models.<key>.limit.{context,
+# output}, and reasoning_options[] entries whose type is "effort" (the other
+# declared kinds carry no effort ladder). <efforts> joins that ladder, or "-"
+# when the model declares none — callers gate effort config on it.
+#
+#   { "zhipuai": {                       # provider id = the top-level key
+#       "name": "Zhipu AI", "api": "https://open.bigmodel.cn/api/paas/v4",
+#       "models": {
+#         "glm-5.3-flash": {              # model key form 1: the bare id
+#           "limit": { "context": 1000000, "output": 131072 },
+#           "reasoning_options": [ { "type": "effort",
+#                                    "values": ["low", "high", "max"] } ],
+#           "name": ..., "cost": {...}, "tool_call": true, ...
+#         }
+#       }
+#     },
+#     "wallaby": { "models": { "moonshotai/kimi-k3": { ... } } },
+#     ...                                 # model key form 2: vendor-prefixed
+#   }                                     # (a mirror's own naming, not ours)
+#
+# Matching, best effort, in order:
+#   1. a "<vendor>/" request takes the FIRST provider whose top-level key
+#      starts with <vendor> and holds a usable entry — a plain string prefix on
+#      the PROVIDER key, so a vendor's other brand is invisible to it and a
+#      model key's own prefix is never consulted.
+#   2. otherwise the first usable carrier in catalog order: deterministic for a
+#      given blob, but not vendor-canonical.
+# Requests split on the FIRST "/" only, so a request without one has an empty
+# vendor and can never take branch 1. Both model key forms are accepted, which
+# is why candidates match on (full id, bare name).
+# An id with no entry — or an entry without a usable limit — yields the
+# conservative 128000/32768 floor with "-". The unusable entry must not count
+# as a match or it shadows a usable carrier further down; the floor only costs
+# early compaction, while an overshoot can 400 every request.
 resolve_llm_model_caps() {
-	local id="$1" out
-	out=$(
-		curl -fsSL --max-time 30 https://models.dev/api.json 2>/dev/null | python3 -c '
+	modelsdev_fetch
+	local out
+	out=$(printf '%s' "$_MODELSDEV_JSON" | python3 -c '
 import json, sys
 try:
 	db = json.load(sys.stdin)
 except Exception:
 	sys.exit(0)
-mid = sys.argv[1]
-vendor, _, bare = mid.partition("/")
-def scan(pred):
-	for p, info in db.items():
-		for m, meta in (info.get("models") or {}).items():
-			if pred(p, m, meta):
-				lim = meta.get("limit") or {}
-				c, o = lim.get("context"), lim.get("output")
-				if c and o:
-					# Third field: the reasoning-effort values the model
-					# accepts (reasoning_options[].values, "-" when the
-					# model declares none) — the caller gates the effort
-					# config on it instead of guessing.
-					efforts = "-"
-					for opt in meta.get("reasoning_options") or []:
-						if opt.get("type") == "effort" and opt.get("values"):
-							efforts = ",".join(str(v) for v in opt["values"])
-					return "%s %s %s" % (c, o, efforts)
-	return ""
-if vendor:
-	r = scan(lambda p, m, meta: p.startswith(vendor) and m in (bare, mid))
-	if r:
-		print(r)
-		sys.exit(0)
-print(scan(lambda p, m, meta: m in (mid, bare)))
-' "$id" 2>/dev/null
-	) || out=""
-	out="${out:-128000 32768 -}"
+
+def caps(meta):
+	lim = meta.get("limit") or {}
+	ctx, out = lim.get("context"), lim.get("output")
+	if not (ctx and out):
+		return ""
+	efforts = "-"
+	for opt in meta.get("reasoning_options") or []:
+		if opt.get("type") == "effort" and opt.get("values"):
+			efforts = ",".join(str(v) for v in opt["values"])
+	return "%s %s %s" % (ctx, out, efforts)
+
+def split(mid):
+	head, sep, tail = mid.partition("/")
+	return (head, tail) if sep else ("", mid)
+
+def lookup(mid):
+	vendor, bare = split(mid)
+	matches = []
+	for provider, info in db.items():
+		for model, meta in (info.get("models") or {}).items():
+			if model in (mid, bare):
+				found = caps(meta)
+				if found:
+					matches.append((bool(vendor) and provider.startswith(vendor), found))
+	for canonical, found in matches:
+		if canonical:
+			return found
+	return matches[0][1] if matches else ""
+
+for arg in sys.argv[1:]:
+	for mid in arg.split(","):
+		mid = mid.strip()
+		if mid:
+			print(mid, lookup(mid) or "128000 32768 -")
+' "$@" 2>/dev/null) || out=""
+	[ -n "$out" ] || return 0
 	printf '%s\n' "$out"
 }
 
-# pick_reasoning_effort <efforts-csv> — the effort tier to configure for a
-# model whose accepted values are listed (from models.dev reasoning_options).
-# "high" is the daily-driver default (cost/latency vs quality), "xhigh" the
-# fallback for ladders that skip it; empty = nothing safe to declare, the
-# caller omits the effort and the runtime/model default applies.
+# resolve_llm_models <primary> -> the agent's effective model list, comma
+# separated: <primary> entries first, then every LLM_MODELS entry not already
+# listed. An empty <primary> hands the role to LLM_MODELS (order kept);
+# LLM_MODEL itself stays the primary (agent-prefix > LLM_MODEL > LLM_MODELS[0]).
+# Either side may be a comma LIST — reading the primary as one id is what once
+# let a duplicate inside LLM_MODELS survive. Normalization is csv_normalize's.
+resolve_llm_models() {
+	csv_normalize "${1:-},${LLM_MODELS:-}"
+}
+
+# pick_reasoning_effort <comma-separated-labels> — the reasoning tier to
+# configure for a model, empty when it declares none ("-" or blank). Prefers
+# "high", falls back to "xhigh": both sit inside the ladder every gateway
+# accepts, anything else risks a 400 on the first request.
+# (This helper was being called by the qwen-code and opencode install hooks
+# with no definition anywhere in the repo — the call sites died with
+# "command not found" under `set -e`.)
 pick_reasoning_effort() {
-	case ",$1," in
-	*,high,*) printf 'high' ;;
-	*,xhigh,*) printf 'xhigh' ;;
-	*) printf '' ;;
-	esac
+	local e
+	[ -n "${1:-}" ] && [ "$1" != "-" ] || return 0
+	for e in high xhigh; do
+		case ",$1," in
+		*",$e,"*)
+			printf '%s' "$e"
+			return 0
+			;;
+		esac
+	done
+	return 0
+}
+
+# llm_model_rows <primary> -> the effective catalog as one
+# "id|context|output|efforts|pick" row per model, no trailing newline (command
+# substitution trims it, so a template's range never sees an empty final row;
+# templates guard on the empty string too). efforts is "-" when the model
+# declares none; pick is the tier to configure (empty = render no effort
+# option). This replaced the per-agent loops that hand-concatenated JSON/YAML
+# fragments — stray commas, a literal \n and last-one-wins duplicate keys came
+# from building structure as strings there.
+llm_model_rows() {
+	local list caps id ctx out eff pick
+	list=$(resolve_llm_models "$1")
+	[ -n "$list" ] || return 0
+	# resolve_llm_model_caps takes one id per argument: split the comma-joined
+	# list here, otherwise the whole list is passed as a single (unknown) id
+	# and every model after the primary silently lands on the floor.
+	caps=$(resolve_llm_model_caps ${list//,/ })
+	while IFS=' ' read -r id ctx out eff; do
+		[ -n "$id" ] || continue
+		pick=$(pick_reasoning_effort "$eff")
+		printf '%s|%s|%s|%s|%s\n' "$id" "$ctx" "$out" "$eff" "$pick"
+	done <<<"$caps"
+}
+
+# csv_normalize <comma-list> -> the list normalized: per-item leading and
+# trailing whitespace stripped, empty items dropped, duplicates dropped (first
+# occurrence keeps its place), rejoined with commas. Nothing else: items are
+# not sorted, not case-folded, and whitespace inside an item survives. Only
+# "," separates, so a value with embedded newlines stays one item.
+#
+#   $ csv_normalize ' 12345678 , 87654321 ,12345678'   -> 12345678,87654321
+#   $ csv_normalize 'a,,b'                              -> a,b
+#
+# In awk so the caller's IFS is untouched (a shell loop leaked IFS="," into the
+# rest of the install function), item text is never pathname-expanded, and the
+# trim classes include CR/LF — the here-string appends a newline that RS=","
+# leaves INSIDE the last record, where trimming only [ \t] let blanks through.
+csv_normalize() {
+	LC_ALL=C awk 'BEGIN { RS = ","; sep = "" }
+	{
+		gsub(/^[ \t\r\n]+/, ""); gsub(/[ \t\r\n]+$/, "")
+		if ($0 != "" && !($0 in seen)) { seen[$0] = 1; printf "%s%s", sep, $0; sep = "," }
+	}' <<<"$1"
 }
 
 # llm_health <label> <KEY_OVERRIDE> <BASE_OVERRIDE> <MODEL_OVERRIDE> <fill_hint> <fallback_note> [RENDERED_FALLBACK_FN]
