@@ -21,12 +21,12 @@
   <array>
     <string>/bin/bash</string>
     <string>-c</string>
-    <string>. '$__HOME__/.config/agent/secrets.env' || exit 1; exec '$__QWEN_BIN__' serve --channel all --hostname 127.0.0.1 --port 4170$__QWEN_SERVE_AUTH_FLAG__</string>
+    <string>. '{{ .Env.HOME }}/.config/agent/secrets.env' || exit 1; exec '{{ .Env.QWEN_BIN }}' serve{{ .Env.QWEN_CHANNEL_ARGS }} --hostname 127.0.0.1 --port 4170{{ .Env.QWEN_SERVE_AUTH_FLAG }}</string>
   </array>
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key>
-    <string>$__QWEN_SERVICE_PATH__</string>
+    <string>{{ .Env.QWEN_SERVICE_PATH }}</string>
   </dict>
   <key>RunAtLoad</key>
   <true/>
@@ -38,8 +38,8 @@
   <key>ThrottleInterval</key>
   <integer>10</integer>
   <key>StandardOutPath</key>
-  <string>$__HOME__/Library/Logs/qwen-serve/out.log</string>
+  <string>{{ .Env.HOME }}/Library/Logs/qwen-serve/out.log</string>
   <key>StandardErrorPath</key>
-  <string>$__HOME__/Library/Logs/qwen-serve/err.log</string>
+  <string>{{ .Env.HOME }}/Library/Logs/qwen-serve/err.log</string>
 </dict>
 </plist>
