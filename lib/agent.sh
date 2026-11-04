@@ -415,6 +415,27 @@ llm_health() {
 	return 0
 }
 
+# secrets_egress_guard — the resident daemons read NO_PROXY from SECRETS_FILE;
+# without the loopback binds they send their own 127.0.0.1 serve/gateway ports
+# through the proxy, and the symptom (403, timeout, a channel that never
+# connects) sits far from the cause. Reports through AGENT_FAILURES so the run
+# still finishes and nothing is fatal mid-run. Reads the FILE value, never the
+# environment: the installer merges the environment, the units start from the file.
+secrets_egress_guard() {
+	local np
+	[ -f "$SECRETS_FILE" ] || return 0
+	np=$(tr -d ' \t\r\n' <<<"$(_file_value NO_PROXY)")
+	case ",$np," in
+	*,127.0.0.1,*) return 0 ;;
+	esac
+	if [ -n "$np" ]; then
+		record_agent_failure "secrets.env NO_PROXY has no loopback bind (${np}) — the daemons would proxy their own 127.0.0.1 ports; add localhost,127.0.0.1,::1"
+	else
+		record_agent_failure "secrets.env NO_PROXY is empty — the daemons would proxy their own 127.0.0.1 ports; set localhost,127.0.0.1,::1 (plus any internal hosts)"
+	fi
+	return 0
+}
+
 # channel_reachability <label> <TOKEN_VAR> <probe-url> <service-name> — the
 # outbound-network pre-flight for a chat channel: Stream/WebSocket channels
 # dial OUT to the vendor (no inbound webhook URL to probe), so plain HTTPS
