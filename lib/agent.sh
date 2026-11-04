@@ -223,16 +223,47 @@ wire_secrets_profile() {
 # models.dev catalog cache: fetched once per install process, shared by
 # every hook's capability resolution (in-memory only; no disk cache).
 _MODELSDEV_JSON=""
+_MODELSDEV_FAILURES=0
+
+# Conservative limits for a model the catalog says nothing about — including
+# the whole-catalog-unreachable case, where EVERY model lands here. The
+# undershoot is deliberate: an over-declared window can 400 every request, an
+# under-declared one only compacts earlier. The python below reads them so the
+# floor lives in exactly one place.
+LLM_FLOOR_CONTEXT=128000
+LLM_FLOOR_OUTPUT=32768
 
 # Function-first: retry's function-export path requires it (a bare
 # binary name would hit `export -f <binary>` errors in some shells).
 modelsdev_curl() {
-	curl -fsSL --max-time 20 https://models.dev/api.json 2>/dev/null
+	curl -fsSL --max-time 45 https://models.dev/api.json 2>/dev/null
 }
 
 modelsdev_fetch() {
+	# Positive cache only: a good catalog is fetched once per run and every
+	# later caller inherits it (the caller must be in this shell, not a $(…)
+	# substitution — see the per-hook prewarm below).
 	[ -n "$_MODELSDEV_JSON" ] && return 0
-	_MODELSDEV_JSON=$(retry -n 3 -d 2 -m 5 -t 30 -s "models.dev catalog" modelsdev_curl) || _MODELSDEV_JSON=""
+	local prof=(-n 4 -d 15 -m 60 -t 60)
+	# A failure is never sticky. One bad sequence must not degrade the rest of
+	# the run: on this machine a real install resolved zero models for opencode
+	# and dsh and five for openclaw and qwen minutes later in the SAME process,
+	# i.e. the proxy blipped and recovered. After the first miss, later requests
+	# still try — just with one cheap attempt instead of the full backoff, so a
+	# genuinely dead catalog can't cost four agents × minutes.
+	[ "$_MODELSDEV_FAILURES" -gt 0 ] && prof=(-n 1 -t 60)
+	if _MODELSDEV_JSON=$(retry "${prof[@]}" -s "models.dev catalog" modelsdev_curl); then
+		_MODELSDEV_FAILURES=0
+		return 0
+	fi
+	# The resolver still emits floor limits for every id (configs never lose
+	# their models); retry already reported each failed attempt, so summarize
+	# only the first miss — the later ones are the same news.
+	_MODELSDEV_JSON=""
+	_MODELSDEV_FAILURES=$((_MODELSDEV_FAILURES + 1))
+	if [ "$_MODELSDEV_FAILURES" -eq 1 ]; then
+		warn "models.dev catalog unreachable — models fall back to the ${LLM_FLOOR_CONTEXT}/${LLM_FLOOR_OUTPUT} floor until a fetch succeeds; later agents keep retrying, and re-running install is the full retry."
+	fi
 	return 0
 }
 
@@ -283,12 +314,18 @@ modelsdev_fetch() {
 resolve_llm_model_caps() {
 	modelsdev_fetch
 	local out
-	out=$(printf '%s' "$_MODELSDEV_JSON" | python3 -c '
-import json, sys
+	out=$(printf '%s' "$_MODELSDEV_JSON" | LLM_FLOOR_CONTEXT="$LLM_FLOOR_CONTEXT" \
+		LLM_FLOOR_OUTPUT="$LLM_FLOOR_OUTPUT" python3 -c '
+import json, os, sys
 try:
 	db = json.load(sys.stdin)
 except Exception:
-	sys.exit(0)
+	# Unreachable or corrupt catalog: keep going with an empty one so every
+	# requested id still gets a line (on the floor limits) instead of the
+	# whole model list vanishing.
+	db = {}
+FLOOR = "%s %s" % (os.environ.get("LLM_FLOOR_CONTEXT", "128000"),
+                   os.environ.get("LLM_FLOOR_OUTPUT", "32768"))
 
 def caps(meta):
 	lim = meta.get("limit") or {}
@@ -323,7 +360,7 @@ for arg in sys.argv[1:]:
 	for mid in arg.split(","):
 		mid = mid.strip()
 		if mid:
-			print(mid, lookup(mid) or "128000 32768 -")
+			print(mid, lookup(mid) or (FLOOR + " -"))
 ' "$@" 2>/dev/null) || out=""
 	[ -n "$out" ] || return 0
 	printf '%s\n' "$out"
@@ -336,7 +373,15 @@ for arg in sys.argv[1:]:
 # Either side may be a comma LIST — reading the primary as one id is what once
 # let a duplicate inside LLM_MODELS survive. Normalization is csv_normalize's.
 resolve_llm_models() {
-	csv_normalize "${1:-},${LLM_MODELS:-}"
+	local catalog="${LLM_MODELS:-}" seeded
+	# secrets.env wins over the environment for LLM_MODELS too, exactly like
+	# every other value through secret(): reading only the environment made
+	# the model list depend on whether the launching shell happened to export
+	# it, so the second install run (or a non-login shell) silently rendered
+	# fewer models than the file asked for.
+	seeded=$(_file_value LLM_MODELS)
+	[ -n "$seeded" ] && catalog="$seeded"
+	csv_normalize "${1:-},${catalog}"
 }
 
 # pick_reasoning_effort <comma-separated-labels> — the reasoning tier to
@@ -404,14 +449,64 @@ csv_normalize() {
 	}' <<<"$1"
 }
 
-# llm_health <label> <KEY_OVERRIDE> <BASE_OVERRIDE> <MODEL_OVERRIDE> <fill_hint> <fallback_note> [RENDERED_FALLBACK_FN]
-# — the shared LLM half of every agent's health hook: presence + the
-# connectivity probe. Params flow straight through to llm_presence
-# and connectivity_check (see those for details).
+# llm_catalog_check <config-file> <count-spec> <MODEL_OVERRIDE> — the rendered
+# config must carry as many models as the secrets catalog asks for
+# (count-spec: "json:<dotted.path>" or "yaml-ids"). A short count is the
+# signature of a catalog that was unreachable at install time. WARN only:
+# editing secrets.env without re-running the installer mismatches legitimately
+# until the next run, and failing the health run for that would be noise.
+llm_catalog_check() {
+	local file="$1" spec="$2" key="$3" prim list want have
+	[ -f "$file" ] || return 0
+	prim=$(secret "$key" LLM_MODEL 2>/dev/null)
+	list=$(resolve_llm_models "$prim")
+	[ -n "$list" ] || return 0
+	want=$(printf '%s' "$list" | tr ',' '\n' | grep -c '[^[:space:]]')
+	case $spec in
+	json:*)
+		have=$(python3 -c '
+import json, sys
+d = json.load(open(sys.argv[1]))
+for part in sys.argv[2].split("."):
+	d = d.get(part) if isinstance(d, dict) else d
+print(len(d) if isinstance(d, (list, dict)) else "")
+' "$file" "${spec#json:}" 2>/dev/null) || have=""
+		;;
+	yaml-ids)
+		# Count ONLY the "- id:" rows inside the models: block — the file also
+		# carries "- id:" rows for plugin patch entries, so a whole-file count
+		# over-reports and the check cries wolf.
+		have=$(awk '
+			function ind(s) { return length(s) - length(substr(s, match(s, /[^[:space:]]/))) }
+			/^[[:space:]]*- id:[[:space:]]/ { if (inm) c++; next }
+			/^[[:space:]]*models:[[:space:]]*$/ { inm = 1; mi = ind($0); next }
+			inm && NF && ind($0) <= mi { inm = 0 }
+			END { print c + 0 }
+		' "$file" 2>/dev/null) || have=""
+		;;
+	*) have="" ;;
+	esac
+	case $have in
+	'' | *[!0-9]*) return 0 ;;
+	esac
+	if [ "$have" -eq 0 ]; then
+		warn "$file rendered NO model entries while secrets.env lists $want — models.dev was likely unreachable during install; re-run it."
+	elif [ "$have" -ne "$want" ]; then
+		warn "$file rendered $have model entries but secrets.env lists $want — re-run the installer to sync."
+	fi
+	return 0
+}
+
+# llm_health <label> <KEY_OVERRIDE> <BASE_OVERRIDE> <MODEL_OVERRIDE> <fill_hint> <fallback_note> [RENDERED_FALLBACK_FN] [CONFIG_FILE] [COUNT_SPEC]
+# — the shared LLM half of every agent's health hook: presence, the
+# connectivity probe and (when the last two args are given) the rendered model
+# count. Params flow straight through to llm_presence, connectivity_check and
+# llm_catalog_check (see those for details).
 llm_health() {
 	local label="$1"
 	llm_presence "$2" "$3" "$4" "$5" "$6"
 	connectivity_check "$label" "$3" "$2" "${7:-}"
+	[ -n "${8:-}" ] && llm_catalog_check "$8" "${9:-}" "$4"
 	return 0
 }
 
