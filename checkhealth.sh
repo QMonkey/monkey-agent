@@ -51,7 +51,7 @@ MAIN_VERSION_TITLE="node"
 #                   hooks, so a fresh machine must not FAIL here)
 REQUIRED_CHECKS=(
 	"@header|Required tools"
-	"envsubst|bin|envsubst (gettext — config template rendering)"
+	"gomplate|ver:5.3|gomplate (config template rendering)"
 	"python3|bin|python3 (health probes)"
 )
 
