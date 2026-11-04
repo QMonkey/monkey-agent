@@ -6,10 +6,10 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=$__OPENCLAW_CHANNEL_CWD__
-ExecStart=$__OPENCLAW_BIN__ gateway run
-Environment=PATH=$__OPENCLAW_SERVICE_PATH__
-EnvironmentFile=$__HOME__/.config/agent/secrets.env
+WorkingDirectory={{ .Env.OPENCLAW_CHANNEL_CWD }}
+ExecStart={{ .Env.OPENCLAW_BIN }} gateway run
+Environment=PATH={{ .Env.OPENCLAW_SERVICE_PATH }}
+EnvironmentFile={{ .Env.HOME }}/.config/agent/secrets.env
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal
