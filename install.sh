@@ -190,6 +190,12 @@ install_shared_secrets() {
 install_step_prepare() {
 	ensure_git
 	install_shared_secrets
+	# Prewarm the models.dev catalog HERE, in the installer process. Each hook
+	# resolves capabilities through $(llm_model_rows …) — a command substitution
+	# — so a cache or failure flag set in that subshell can never reach the next
+	# agent; without this, all four pay their own retry sequence against a dead
+	# proxy (measured: 20 curl calls vs 5, i.e. minutes of pure backoff).
+	modelsdev_fetch
 	echo ""
 }
 
