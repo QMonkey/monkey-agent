@@ -147,7 +147,7 @@ _openclaw_register_services_linux() {
 	# The subshell bounds these exports (as at every render site): a leaked
 	# value would let a later render fill a missing reference silently.
 	(
-			export OPENCLAW_BIN="$openclaw_bin" OPENCLAW_SERVICE_PATH="$PATH" OPENCLAW_CHANNEL_CWD="$HOME"
+		export OPENCLAW_BIN="$openclaw_bin" OPENCLAW_SERVICE_PATH="$PATH" OPENCLAW_CHANNEL_CWD="$HOME"
 		render \
 			"$AGENT_REPO_ROOT/openclaw/service/openclaw-gateway.service.template" \
 			"$unit_dir/openclaw-gateway.service"
@@ -202,7 +202,7 @@ _openclaw_register_services_macos() {
 	# The subshell bounds these exports (as at every render site): a leaked
 	# value would let a later render fill a missing reference silently.
 	(
-			export OPENCLAW_BIN="$openclaw_bin" OPENCLAW_SERVICE_PATH="$PATH" OPENCLAW_CHANNEL_CWD="$HOME"
+		export OPENCLAW_BIN="$openclaw_bin" OPENCLAW_SERVICE_PATH="$PATH" OPENCLAW_CHANNEL_CWD="$HOME"
 		render \
 			"$AGENT_REPO_ROOT/openclaw/service/$label.plist.template" \
 			"$agents_dir/$label.plist"
