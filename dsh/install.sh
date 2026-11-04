@@ -17,7 +17,7 @@
 #     plugin row. apiKeyEnv is the credential indirection: the KEY VALUE
 #     never enters the file, dsh resolves it from the process environment
 #     per request (secrets.env sourcing feeds the interactive shell).
-#   - Renderer: pure envsubst over $__X__ placeholders — values are
+#   - Renderer: gomplate over {{ .Env.NAME }} references — values are
 #     quoted-scalar-safe (URLs/model ids/numbers), via the environment
 #     only, never argv.
 #   - Base URL / model id fall back to the OFFICIAL public endpoint (public
@@ -134,59 +134,43 @@ install_agent_dsh() {
 	# Web-profile plugins (dsh/plugins.txt; needs the binary).
 	_dsh_install_plugins || rc=$?
 
-	# Render the config. render is a pure envsubst engine — it cannot
+	# Render the config. render resolves references only — it cannot
 	#    apply the §4.2 per-field override precedence itself, so the
 	#    effective values are resolved here and exported; the real
 	#    secrets.env stays untouched.
 	#    The API key renders as a NAME only (apiKeyEnv indirection); base
 	#    URL and model are VALUES, but public information by default
 	#    (DeepSeek's official endpoint/model) and machine-local otherwise.
-	local eff_key_var="LLM_API_KEY"
+	local eff_key_name="LLM_API_KEY"
 	if [ -n "$(secret DSH_LLM_API_KEY 2>/dev/null)" ]; then
-		eff_key_var="DSH_LLM_API_KEY"
+		eff_key_name="DSH_LLM_API_KEY"
 	fi
 	local eff_base eff_model
 	eff_base=$(secret DSH_LLM_BASE_URL LLM_BASE_URL 2>/dev/null)
 	eff_model=$(secret DSH_LLM_MODEL LLM_MODEL 2>/dev/null)
-	if [ -z "$(secret DSH_LLM_API_KEY 2>/dev/null)" ] &&
-		[ -z "$(secret LLM_API_KEY 2>/dev/null)" ]; then
+	if [ -z "$(secret DSH_LLM_API_KEY 2>/dev/null)" ] && [ -z "$(secret LLM_API_KEY 2>/dev/null)" ]; then
 		info "LLM_API_KEY / DSH_LLM_API_KEY not set — the config references an empty variable; fill ${SECRETS_FILE#"$HOME"/} and re-run (or set it in the shell)."
 	fi
 
 	local template="$AGENT_REPO_ROOT/dsh/cordis.patch.yml.template"
 	local rendered="$AGENT_HOME/dsh/cordis.patch.yml"
-	# Model capability limits (contextWindow / maxTokens): resolved from
-	# models.dev against the EFFECTIVE model (see resolve_llm_model_caps in
-	# lib/agent.sh); a miss lands on the conservative 128000/32768 floor.
-	# The reasoningEfforts map declares the endpoint's accepted effort
-	# labels (models.dev reasoning_options) as identity mappings — the
-	# wire value equals the label, so nothing is invented; levels left
-	# undeclared become unavailable (dsh semantics: the map IS the
-	# capability surface). No declaration when the model publishes none.
-	local eff_ctx eff_out eff_efforts eff_effort_fragment=""
-	read -r eff_ctx eff_out eff_efforts <<<"$(resolve_llm_model_caps "$eff_model")"
-	if [ "$eff_efforts" != "-" ] && [ -n "$eff_efforts" ]; then
-		# Vocabulary translation: models.dev marks a model's no-thinking
-		# tier as "none"; dsh's level id for it is "off", whose wire value
-		# here is the endpoint's own disable label ("none"). Other levels
-		# map identically (the models.dev values ARE the endpoint labels).
-		local eff_map="" e wire
-		local IFS=","
-		for e in $eff_efforts; do
-			case "$e" in
-			none) wire="off: none" ;;
-			*) wire="$e: $e" ;;
-			esac
-			eff_map+="              $wire"$'\n'
-		done
-		eff_effort_fragment="reasoningEfforts:"$'\n'"${eff_map%$'\n'}"
-	fi
+	# Model catalog: one "id|context|output|efforts|pick" row per model
+	# (llm_model_rows), resolved from the cached models.dev against the
+	# effective list, misses on the conservative floor. The template renders
+	# the YAML list and the reasoningEfforts map from it: labels map to
+	# themselves (the wire value equals the label; nothing invented), undeclared
+	# levels stay unavailable, and models.dev's "none" tier renders under dsh's
+	# level id "off" whose wire value is the endpoint's own disable label.
+	local model_rows
+	model_rows=$(llm_model_rows "$eff_model")
+	# The subshell is not for `|| rc=$?` (identical either way): it bounds these
+	# exports, so nothing resolved here survives into another agent's render, or
+	# into secret()'s process-env fallback. Keep the parentheses.
 	(
-		# The RESOLVED override-layer values are exported here.
-		export DSH_API_KEY_ENV="$eff_key_var" \
-			DSH_LLM_BASE_URL="$eff_base" \
-			DSH_LLM_MODEL="$eff_model" \
-			DSH_LLM_CTX="$eff_ctx" DSH_LLM_OUT="$eff_out" DSH_LLM_EFFORT="$eff_effort_fragment"
+		# Only resolved VALUES are exported. Every reference the template
+		# reads must be exported, empty included — gomplate aborts the render
+		# on an unset one and reports the offending names.
+		export DSH_LLM_BASE_URL="$eff_base" DSH_LLM_API_KEY_ENV_NAME="$eff_key_name" DSH_LLM_MODEL_ROWS="$model_rows"
 		render "$template" "$rendered"
 	) || rc=$?
 
