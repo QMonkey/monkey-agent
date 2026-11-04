@@ -104,7 +104,8 @@ checkhealth_agent_qwen_code() {
 		rc=1
 	fi
 
-	llm_health qwen QWEN_LLM_API_KEY QWEN_LLM_BASE_URL QWEN_LLM_MODEL "" ""
+	llm_health qwen QWEN_LLM_API_KEY QWEN_LLM_BASE_URL QWEN_LLM_MODEL "" "" "" \
+		"$HOME/.config/agent/qwen/settings.json" json:modelProviders.openai
 
 	# Serve daemon bearer token (token-auth vs token-less posture).
 	if [ -n "$(secret QWEN_SERVER_TOKEN 2>/dev/null)" ]; then
