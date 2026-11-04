@@ -109,7 +109,7 @@ _openclaw_install_binary() {
 		# 2026-10-24, https://docs.openclaw.ai/install): provisions its own
 		# Node/OpenClaw when npm could not.
 		info "npm install failed — falling back to the official installer script (--no-onboard)..."
-		curl -fsSL https://openclaw.ai/install.sh | bash -s -- --no-onboard || rc=$?
+		retry -s "openclaw installer" sh -c 'curl -fsSL https://openclaw.ai/install.sh | bash -s -- --no-onboard' || rc=$?
 		if [ "$rc" -ne 0 ]; then
 			warn "openclaw installation failed — install it manually: npm install -g openclaw@latest (or: curl -fsSL https://openclaw.ai/install.sh | bash -s -- --no-onboard)"
 			return 1
@@ -298,7 +298,7 @@ install_agent_openclaw() {
 	#    service is the documented headless path; the non-interactive
 	#    onboard flags exist but pass secrets via argv or require env
 	#    plumbing of their own — the config route needs neither).
-	#    render is a pure envsubst engine — it cannot apply the §4.2
+	#    render resolves references only — it cannot apply the §4.2
 	#    per-field override precedence itself, so the effective values are
 	#    resolved here and exported (the real secrets.env stays untouched).
 	#    Base URL and model are VALUES — public information by default
@@ -314,38 +314,26 @@ install_agent_openclaw() {
 	fi
 	eff_base=$(secret OPENCLAW_LLM_BASE_URL LLM_BASE_URL 2>/dev/null)
 	eff_model=$(secret OPENCLAW_LLM_MODEL LLM_MODEL 2>/dev/null)
-	# Model capability limits (contextWindow / maxTokens): resolved from
-	# models.dev against the EFFECTIVE model (see resolve_llm_model_caps); a miss
-	# lands on the conservative 128000/32768 floor. The compat ladder
-	# declares the endpoint's accepted effort labels (models.dev's
-	# reasoning_options) — upstream clamps its thinking tiers to it; without
-	# the declaration the default ladder low/medium/high applies.
-	local eff_ctx eff_out eff_efforts eff_ladder_fragment=""
-	read -r eff_ctx eff_out eff_efforts <<<"$(resolve_llm_model_caps "$eff_model")"
-	if [ "$eff_efforts" != "-" ] && [ -n "$eff_efforts" ]; then
-		local items="" e
-		local IFS=","
-		for e in $eff_efforts; do
-			items+="\"$e\","
-		done
-		eff_ladder_fragment="\"compat\": { \"supportedReasoningEfforts\": [${items%,}] },"
-	fi
+	# The model catalog: one "id|context|output|efforts|pick" row per model
+	# (llm_model_rows in lib/agent.sh) — the template renders the provider's
+	# models array from it, including the reasoning flag and the
+	# compat.supportedReasoningEfforts ladder (the accepted effort labels from
+	# models.dev's reasoning_options; no compat block when the model declares
+	# none).
+	local model_rows
+	model_rows=$(llm_model_rows "$eff_model")
 	if [ -z "$(secret OPENCLAW_LLM_API_KEY 2>/dev/null)" ] && [ -z "$(secret LLM_API_KEY 2>/dev/null)" ]; then
 		info "LLM_API_KEY / OPENCLAW_LLM_API_KEY not set — the config references an empty variable; fill ${SECRETS_FILE#"$HOME"/} and re-run."
 	fi
 
-	# OPENCLAW_GATEWAY_TOKEN is optional (onboarding generates one by
-	# default — gateway.auth.mode "token"); when set the config renders with
-	# token auth, when empty the loopback Gateway runs token-less (warned
-	# about below).
-	#    Gateway auth fragment: token mode ONLY when a token exists; a
-	#    token-less loopback control plane is warned about (informed
-	#    choice, design "warn, never block"). The fragment travels to the
-	#    renderer through the environment (OPENCLAW_GATEWAY_AUTH), never
-	#    argv, and contains the token NAME only — `${OPENCLAW_GATEWAY_TOKEN}`.
-	local gateway_auth_json=""
+	# OPENCLAW_GATEWAY_TOKEN is optional (onboarding generates one); when set
+	# the config renders gateway.auth in token mode, when empty the loopback
+	# Gateway runs token-less (warned below). The auth object is the template's
+	# — this only decides the gate flag, and the token travels as a ${VAR}
+	# NAME, never a value.
+	local gateway_auth=""
 	if [ -n "$(secret OPENCLAW_GATEWAY_TOKEN 2>/dev/null)" ]; then
-		gateway_auth_json='"auth": { "mode": "token", "token": "${OPENCLAW_GATEWAY_TOKEN}" },'
+		gateway_auth=1
 		ok "OPENCLAW_GATEWAY_TOKEN is set — the gateway boots with token auth."
 	else
 		warn "OPENCLAW_GATEWAY_TOKEN is not set — the gateway will run token-less: any local process that can reach 127.0.0.1:18789 can drive the assistant (dashboard + full agent API). Set OPENCLAW_GATEWAY_TOKEN and re-run to enable gateway.auth token mode."
@@ -353,79 +341,45 @@ install_agent_openclaw() {
 	if [ -z "$(secret OPENCLAW_DINGTALK_ACCESS_TOKEN 2>/dev/null)" ] || [ -z "$(secret OPENCLAW_DINGTALK_SECRET 2>/dev/null)" ]; then
 		info "DingTalk credentials not set — the dingtalk-connector channel will not connect; fill OPENCLAW_DINGTALK_* in ${SECRETS_FILE#"$HOME"/} and restart the service."
 	fi
-	if [ -z "$(secret OPENCLAW_QQ_APP_ID 2>/dev/null)" ] || [ -z "$(secret OPENCLAW_QQ_CLIENT_SECRET 2>/dev/null)" ]; then
-		info "QQ Bot credentials not set — the qqbot channel will not connect; fill OPENCLAW_QQ_APP_ID / OPENCLAW_QQ_CLIENT_SECRET in ${SECRETS_FILE#"$HOME"/} and restart the service."
+	# Channel gate flags — the members themselves live in config.template.
+	# Both are gated on plugin presence AND credentials: an empty ${VAR}
+	# reference reads as an unresolved SecretRef and the Gateway REFUSES TO
+	# START (observed 2026.10.9 crash loop with the member present and the
+	# credentials empty). A channel key is legal only while its plugin is
+	# installed — the strict schema refuses unknown keys — hence the gate.
+	local chan_dingtalk="" chan_qq="" qq_allow=""
+	if [ "$plugin_dingtalk" -eq 1 ] &&
+		[ -n "$(secret OPENCLAW_DINGTALK_ACCESS_TOKEN 2>/dev/null)" ] && [ -n "$(secret OPENCLAW_DINGTALK_SECRET 2>/dev/null)" ]; then
+		chan_dingtalk=1
 	fi
-	#    Channels member: STATIC text injected through the template's
-	#    OPENCLAW_CHANNELS placeholder (credentials are ${VAR} name
-	#    references; a channel key is only legal when its plugin is
-	#    installed — OpenClaw's strict schema refuses unknown channel keys
-	#    and the Gateway would refuse to start — hence the plugin-presence
-	#    gate; empty renders "channels": {}).
-	local channels_json=""
-	# dingtalk-connector: gated on BOTH the plugin presence AND its
-	# credentials — an empty ${VAR} reference renders as an empty string,
-	# which upstream's SecretRef validation treats as unresolved and the
-	# Gateway REFUSES TO START (observed 2026.10.9: crash loop with the
-	# member present and OPENCLAW_DINGTALK_* empty). Same posture as the
-	# qqbot member below: no credentials, no channel member.
-	local dt_token dt_secret
-	dt_token=$(secret OPENCLAW_DINGTALK_ACCESS_TOKEN 2>/dev/null)
-	dt_secret=$(secret OPENCLAW_DINGTALK_SECRET 2>/dev/null)
-	if [ "$plugin_dingtalk" -eq 1 ] && [ -n "$dt_token" ] && [ -n "$dt_secret" ]; then
-		channels_json='"dingtalk-connector": {
-      "enabled": true,
-      "clientId": "${OPENCLAW_DINGTALK_ACCESS_TOKEN}",
-      "clientSecret": "${OPENCLAW_DINGTALK_SECRET}"
-    }'
+	if [ "$plugin_qq" -eq 1 ] &&
+		[ -n "$(secret OPENCLAW_QQ_APP_ID 2>/dev/null)" ] && [ -n "$(secret OPENCLAW_QQ_CLIENT_SECRET 2>/dev/null)" ] && [ -n "$(secret OPENCLAW_QQ_ALLOW_FROM 2>/dev/null)" ]; then
+		chan_qq=1
+		# The allowlist travels as a bare comma list (whitespace stripped,
+		# empties and duplicates dropped by csv_normalize) — the template turns it
+		# into the JSON array, so no quoting happens here.
+		qq_allow=$(csv_normalize "$(secret OPENCLAW_QQ_ALLOW_FROM 2>/dev/null)")
+	elif [ "$plugin_qq" -eq 1 ]; then
+		info "QQ Bot credentials incomplete — the channel needs OPENCLAW_QQ_APP_ID + OPENCLAW_QQ_CLIENT_SECRET + OPENCLAW_QQ_ALLOW_FROM (comma-separated allowed sender ids); the config renders WITHOUT the qqbot channel."
 	fi
-	if [ "$plugin_qq" -eq 1 ]; then
-		# Credentials via the channel's OWN config fields (the plugin's
-		# configSchema: appId / clientSecret) as ${VAR} references — the
-		# agent-prefixed names match the family convention and no value
-		# ever enters this file.
-		#
-		# The member renders ONLY when the credentials AND the allowlist
-		# are all present: the qqbot 2.0 plugin's schema REQUIRES at least
-		# one allowFrom entry (the "*" wildcard and an empty list are both rejected
-		# — who may talk to the bot is the operator's decision, not the installer's).
-		# Allowlist format: comma-separated openids/sender ids in OPENCLAW_QQ_ALLOW_FROM.
-		local qq_appid qq_secret qq_allow
-		qq_appid=$(secret OPENCLAW_QQ_APP_ID 2>/dev/null)
-		qq_secret=$(secret OPENCLAW_QQ_CLIENT_SECRET 2>/dev/null)
-		qq_allow=$(secret OPENCLAW_QQ_ALLOW_FROM 2>/dev/null)
-		if [ -n "$qq_appid" ] && [ -n "$qq_secret" ] && [ -n "$qq_allow" ]; then
-			local qq_items="" qq_id
-			local IFS=","
-			for qq_id in $qq_allow; do
-				qq_id="${qq_id#"${qq_id%%[![:space:]]*}"}"
-				qq_id="${qq_id%"${qq_id##*[![:space:]]}"}"
-				[ -n "$qq_id" ] && qq_items+="\"${qq_id}\","
-			done
-			qq_items="${qq_items%,}"
-			[ -n "$channels_json" ] && channels_json="$channels_json,
-			"
-			channels_json="$channels_json"'"qqbot": {
-      "enabled": true,
-      "dmPolicy": "open",
-      "appId": "${OPENCLAW_QQ_APP_ID}",
-      "clientSecret": "${OPENCLAW_QQ_CLIENT_SECRET}",
-      "allowFrom": ['"$qq_items"']
-    }'
-		elif [ -n "$qq_appid" ] || [ -n "$qq_secret" ] || [ -n "$qq_allow" ]; then
-			info "QQ Bot credentials incomplete — the channel needs OPENCLAW_QQ_APP_ID + OPENCLAW_QQ_CLIENT_SECRET + OPENCLAW_QQ_ALLOW_FROM (comma-separated allowed sender ids); the config renders WITHOUT the qqbot channel."
-		fi
-	fi
+	# The subshell is not for `|| rc=$?` (identical either way): it bounds these
+	# exports. This hook also renders the service unit, whose template reads some
+	# of the SAME names, so a leaked export would let a later render fill a missing
+	# reference from an earlier value instead of aborting. Keep the parentheses.
 	(
-		# The RESOLVED values are exported here.
+		# Only resolved VALUES are exported. Every reference the template
+		# reads must be exported, empty included — gomplate aborts the render
+		# on an unset one and reports the offending names.
 		export OPENCLAW_WORKSPACE="$HOME/.openclaw/workspace" \
 			OPENCLAW_LLM_API_KEY_ENV_NAME="$eff_key_name" \
 			OPENCLAW_LLM_BASE_URL="$eff_base" \
 			OPENCLAW_LLM_MODEL="$eff_model" \
 			OPENCLAW_PRIMARY_MODEL="custom/$eff_model" \
-			OPENCLAW_GATEWAY_AUTH="$gateway_auth_json" \
-			OPENCLAW_LLM_CTX="$eff_ctx" OPENCLAW_LLM_OUT="$eff_out" OPENCLAW_LLM_EFFORT="$eff_ladder_fragment" \
-			OPENCLAW_CHANNELS="$channels_json"
+			OPENCLAW_GATEWAY_AUTH="$gateway_auth" \
+			OPENCLAW_LLM_MODEL_ROWS="$model_rows" \
+			OPENCLAW_CHANNEL_DINGTALK="$chan_dingtalk" \
+			OPENCLAW_CHANNEL_QQ="$chan_qq" \
+			OPENCLAW_QQ_ALLOW_FROM="$qq_allow"
 		render \
 			"$AGENT_REPO_ROOT/openclaw/config.template" \
 			"$AGENT_HOME/openclaw/openclaw.json"
