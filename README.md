@@ -39,9 +39,11 @@ hand when a real need shows up.
 
 ## Requirements
 
-- Linux or macOS; bash 3.2+, curl, git; gomplate (config template
-  rendering — `brew install gomplate`, or the release binary; no Linux distro
-  packages it), python3 (health probes).
+- Linux or macOS; bash 3.2+, curl, git; python3 (health probes).
+  gomplate (config template rendering) needs no manual install — the
+  required-tools spec declares `pkg,brew:gomplate`, so the dependency pass
+  takes the distro package where one ships it (arch's AUR) and Homebrew
+  everywhere else, bootstrapping Homebrew on a host that has none.
 - Node.js: DSH and Qwen Code need **22+**; OpenClaw needs **24.16+ /
   26.1+**. Provisioning goes through the framework's `ensure_node_at_least`:
   distro packages when new enough, Homebrew (which ships a current node on
@@ -336,13 +338,12 @@ dependencies. Run it after installing to see what is missing.
 ```text
 install.sh            one-shot installer (agent selection via --with-*)
 checkhealth.sh        dependency + health check
-checktemplates.sh     template/rendering gate: every template renders to valid
-                      JSON/YAML/XML through the real render(), every {{ .Env.X }}
-                      has an assignment at its render site, and a missing one
-                      must fail the render by name
 lib/agent.sh          shared helpers: secrets resolution, credential fill,
-                      block wiring, agent contract (rendering lives in the
-                      framework: scripts/lib/template.sh)
+                      block wiring, the agent roster (ALL_AGENTS) and the
+                      scaffolding every agent reuses (Node floor, npm install
+                      lane, credential pair, resident-service registration) —
+                      rendering lives in the framework:
+                      scripts/lib/template.sh
 secrets.env.template   the full local-values variable set, grouped per agent
 <agent>/              one folder per agent — templates and agent-specific
                       files only; each defines install_agent_<name>() /
@@ -351,4 +352,6 @@ scripts/              shared installer/check framework (a `git subtree` of
                       github.com/QMonkey/monkey-scripts)
 ```
 
-Adding an agent means adding one folder — the skeleton and framework stay untouched.
+Adding an agent means adding one folder plus its name in `ALL_AGENTS`
+(`lib/agent.sh`) — the `--with-*` flags, the default enable set and the usage
+text all derive from that list, and the framework subtree stays untouched.
