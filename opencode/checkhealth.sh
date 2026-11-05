@@ -27,20 +27,8 @@
 checkhealth_agent_opencode() {
 	local rc=0
 
-	# Binary + version.
-	if have_native_cmd opencode; then
-		local ver
-		ver=$(extract_version opencode '[0-9]+\.[0-9]+\.[0-9]+[^ ]*')
-		if [ -n "$ver" ]; then
-			ok "opencode version: $ver"
-		else
-			warn "opencode found but --version produced no parsable output."
-			rc=1
-		fi
-	else
-		warn "opencode binary not found — install it: npm i -g opencode-ai (or curl -fsSL https://opencode.ai/install | bash)"
-		rc=1
-	fi
+	binary_version_check opencode '[0-9]+\.[0-9]+\.[0-9]+[^ ]*' \
+		"npm i -g opencode-ai (or curl -fsSL https://opencode.ai/install | bash)" || rc=1
 
 	llm_health opencode OPENCODE_LLM_API_KEY OPENCODE_LLM_BASE_URL OPENCODE_LLM_MODEL "" " The rendered opencode.json will then have empty fields." \
 		"$HOME/.config/agent/opencode/opencode.json" json:provider.llm.models
