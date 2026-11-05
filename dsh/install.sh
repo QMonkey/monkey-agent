@@ -7,9 +7,9 @@
 # Facts this file depends on:
 #   - npm @deepseek-ai/dsh (bin `dsh`), Node.js 22+. `dsh plugin` forwards
 #     to pnpm, so pnpm is provisioned before any plugin install.
-#   - Web profile only (headless/GUI/TUI are out of scope — design §4.4);
-#     config at ~/.dsh/profiles/web/cordis.patch.yml, one Cordis patch entry
-#     per plugin row, re-read on every request (config edits need no restart).
+#   - Web profile only (headless/GUI/TUI are out of scope); config at
+#     ~/.dsh/profiles/web/cordis.patch.yml, one Cordis patch entry per plugin
+#     row, re-read on every request (config edits need no restart).
 #   - apiKeyEnv is the credential indirection: the key VALUE never enters the
 #     file — dsh resolves it from the process environment per request.
 #   - Renderer is gomplate over {{ .Env.NAME }}; values reach it through the
@@ -19,49 +19,16 @@
 #     information); a private endpoint or model id is a secret and comes from
 #     DSH_LLM_BASE_URL / DSH_LLM_MODEL or the shared LLM_* layer.
 _dsh_install_binary() {
-	if have_native_cmd dsh; then
-		ok "dsh already installed."
-		return 0
-	fi
-	local rc=0
-	# Node.js 22+ floor: ensure_node_at_least provisions node meeting the
-	# floor (distro packages when new enough, Homebrew when the distro
-	# index ships 18/20 — see toolchain.sh).
-	ensure_node_at_least 22 || {
-		warn "Node.js 22+ is required but not available (found: $(node -v 2>/dev/null || echo none)) — install Node.js 22+ manually: $(get_install_hint node)"
-		return 1
-	}
-	if ! bin_at_least node 22; then
-		warn "Node.js 22+ is required but not available (found: $(node -v 2>/dev/null || echo none)) — install Node.js 22+ manually: $(get_install_hint node)"
-		return 1
-	fi
-	info "Installing dsh (npm_install_g @deepseek-ai/dsh — pinned 2026-10-24, https://github.com/deepseek-ai/deepseek-harness)..."
-	# npm_install_g (framework toolchain): ensure_node_and_npm, user-owned prefix,
-	# retry, npm ≥ 11.19 --allow-scripts gate. dsh declares no lifecycle
-	# scripts today, so the gate is a no-op here — the helper is used for
-	# the prefix/retry semantics and lane consistency with the other agents.
-	npm_install_g @deepseek-ai/dsh || rc=$?
-	if [ "$rc" -ne 0 ]; then
-		warn "dsh installation failed (rc $rc) — install it manually: npm install -g @deepseek-ai/dsh"
-		return 1
-	fi
-	if have_native_cmd dsh; then
-		return 0
-	fi
-	# npm succeeded, so the bin exists in npm's global prefix — just not on
-	# THIS shell's PATH yet (a new shell picks it up).
-	warn "dsh installed but not on this shell's PATH — open a new shell (npm's global bin directory)."
-	return 0
+	npm_agent_install dsh @deepseek-ai/dsh 22 "npm install -g @deepseek-ai/dsh"
 }
 
-# _dsh_install_plugins — install the web profile's 4 plugins from
+# _dsh_install_plugins — install the web profile's plugins from
 # dsh/plugins.txt. `dsh plugin --profile web add <id>` forwards to pnpm in
-# the profile directory (dsh requires a pnpm on PATH for plugin management —
-# verified 2026-10-24; provisioned via npm when missing), an
-# already-installed plugin (found by `dsh plugin --profile web ls`) is
-# skipped, and pnpm's own re-add is a no-op success, so the step is
-# idempotent. Per-plugin failures are warned and collected; the step
-# returns non-zero only if pnpm or any plugin failed.
+# the profile directory (dsh requires a pnpm on PATH for plugin management;
+# provisioned via npm when missing), an already-installed plugin (found by
+# `dsh plugin --profile web ls`) is skipped, and pnpm's own re-add is a no-op
+# success, so the step is idempotent. Per-plugin failures are warned and
+# collected; the step returns non-zero only if pnpm or any plugin failed.
 _dsh_install_plugins() {
 	if ! have_native_cmd dsh; then
 		warn "dsh binary not found — skipping web-profile plugin install."
@@ -109,6 +76,7 @@ _dsh_install_plugins() {
 	fi
 	return "$rc"
 }
+
 # install_agent_dsh — the agent contract function (see lib/agent.sh).
 # Failure policy: warns for recoverable problems, returns non-zero on real
 # failures (the hook wrapper collects them); never exits, never blocks on a
@@ -124,35 +92,17 @@ install_agent_dsh() {
 	# Web-profile plugins (dsh/plugins.txt; needs the binary).
 	_dsh_install_plugins || rc=$?
 
-	# Render the config. render resolves references only — it cannot
-	#    apply the §4.2 per-field override precedence itself, so the
-	#    effective values are resolved here and exported; the real
-	#    secrets.env stays untouched.
-	#    The API key renders as a NAME only (apiKeyEnv indirection); base
-	#    URL and model are VALUES, but public information by default
-	#    (DeepSeek's official endpoint/model) and machine-local otherwise.
-	local eff_key_name="LLM_API_KEY"
-	if [ -n "$(secret DSH_LLM_API_KEY 2>/dev/null)" ]; then
-		eff_key_name="DSH_LLM_API_KEY"
-	fi
-	local eff_base eff_model
-	eff_base=$(secret DSH_LLM_BASE_URL LLM_BASE_URL 2>/dev/null)
-	eff_model=$(secret DSH_LLM_MODEL LLM_MODEL 2>/dev/null)
-	if [ -z "$(secret DSH_LLM_API_KEY 2>/dev/null)" ] && [ -z "$(secret LLM_API_KEY 2>/dev/null)" ]; then
-		info "LLM_API_KEY / DSH_LLM_API_KEY not set — the config references an empty variable; fill ${SECRETS_FILE#"$HOME"/} and re-run (or set it in the shell)."
-	fi
-
+	# Render the config. The API key renders as a NAME only (apiKeyEnv
+	#    indirection); base URL and model are VALUES, public information by
+	#    default (DeepSeek's official endpoint/model) and machine-local
+	#    otherwise. The model catalog rows drive both the YAML list and the
+	#    reasoningEfforts map: labels map to themselves (the wire value equals
+	#    the label), undeclared levels stay unavailable, and models.dev's
+	#    "none" tier renders under dsh's level id "off" whose wire value is the
+	#    endpoint's own disable label.
 	local template="$AGENT_REPO_ROOT/dsh/cordis.patch.yml.template"
 	local rendered="$AGENT_HOME/dsh/cordis.patch.yml"
-	# Model catalog: one "id|context|output|efforts|pick" row per model
-	# (llm_model_rows), resolved from the cached models.dev against the
-	# effective list, misses on the conservative floor. The template renders
-	# the YAML list and the reasoningEfforts map from it: labels map to
-	# themselves (the wire value equals the label; nothing invented), undeclared
-	# levels stay unavailable, and models.dev's "none" tier renders under dsh's
-	# level id "off" whose wire value is the endpoint's own disable label.
-	local model_rows
-	model_rows=$(llm_model_rows "$eff_model")
+	llm_resolve DSH
 	# The subshell is not for `|| rc=$?` (identical either way): it bounds these
 	# exports, so nothing resolved here survives into another agent's render, or
 	# into secret()'s process-env fallback. Keep the parentheses.
@@ -160,7 +110,7 @@ install_agent_dsh() {
 		# Only resolved VALUES are exported. Every reference the template
 		# reads must be exported, empty included — gomplate aborts the render
 		# on an unset one and reports the offending names.
-		export DSH_LLM_BASE_URL="$eff_base" DSH_LLM_API_KEY_ENV_NAME="$eff_key_name" DSH_LLM_MODEL_ROWS="$model_rows"
+		export DSH_LLM_BASE_URL="$EFF_BASE" DSH_LLM_API_KEY_ENV_NAME="$EFF_KEY_NAME" DSH_LLM_MODEL_ROWS="$EFF_ROWS"
 		render "$template" "$rendered"
 	) || rc=$?
 
