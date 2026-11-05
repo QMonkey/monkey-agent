@@ -15,145 +15,35 @@
 #     process; DingTalk (Stream mode) and QQ Bot are both OUTBOUND
 #     WebSocket and are inlined in settings.json.template. Two daemons, or
 #     a --channel flag with zero channels, is the failure mode to avoid.
-#   - A unit/plist render failure must skip registration entirely (see the
-#     register helpers): a stale unit would otherwise be loaded and restarted
+#   - The unit/plist render and the whole registration ceremony live in
+#     lib/agent.sh's register_service: a render failure skips registration
+#     entirely, because a stale unit would otherwise be loaded and restarted
 #     into a crash loop.
 _qwen_install_binary() {
-	if have_native_cmd qwen; then
-		ok "qwen already installed."
-		return 0
-	fi
-	local rc=0
-	# Node.js 22+ floor: ensure_node_at_least provisions node meeting the
-	# floor (distro packages when new enough, Homebrew when the distro
-	# index ships 18/20 — see toolchain.sh).
-	ensure_node_at_least 22 || {
-		warn "Node.js 22+ is required but not available (found: $(node -v 2>/dev/null || echo none)) — install Node.js 22+ manually: $(get_install_hint node)"
-		return 1
-	}
-	if ! bin_at_least node 22; then
-		warn "Node.js 22+ is required but not available (found: $(node -v 2>/dev/null || echo none)) — install Node.js 22+ manually: $(get_install_hint node)"
-		return 1
-	fi
-	info "Installing qwen (npm_install_g @qwen-code/qwen-code — pinned 2026-10-24, https://qwenlm.github.io/qwen-code-docs/users/quickstart/)..."
-	# npm_install_g (framework toolchain): ensure_node_and_npm, user-owned prefix,
-	# retry, npm ≥ 11.19 --allow-scripts gate. @qwen-code/qwen-code declares
-	# no lifecycle scripts today — gate is a no-op, kept for lane consistency.
-	npm_install_g @qwen-code/qwen-code || rc=$?
-	if [ "$rc" -ne 0 ]; then
-		warn "qwen installation failed (rc $rc) — install it manually: npm install -g @qwen-code/qwen-code"
-		return 1
-	fi
-	if have_native_cmd qwen; then
-		return 0
-	fi
-	# npm succeeded, so the bin exists in npm's global prefix — just not on
-	# THIS shell's PATH yet (a new shell picks it up).
-	warn "qwen installed but not on this shell's PATH — open a new shell (npm's global bin directory)."
-	return 0
+	npm_agent_install qwen @qwen-code/qwen-code 22 "npm install -g @qwen-code/qwen-code"
 }
 
-# _qwen_register_services_linux — render the unit into
-# ~/.config/systemd/user/, daemon-reload, enable --now, linger best-effort.
-# Gated on secrets.env: the unit is only enabled+started when secrets.env
-# exists and is non-empty (its credential env file) — without credentials
-# the channel adapters inside the daemon would crash-loop under systemd's
-# Restart=on-failure (observed live: restart counter >40 within minutes).
-# A failed unit render skips the whole registration: daemon-reload would
-# load a stale/broken unit into the manager.
-_qwen_register_services_linux() {
-	# `qwen serve --channel` = ONE resident process: the loopback HTTP+SSE
-	# daemon (Web Shell, port 4170) AND the channel adapters. Unit shape
-	# mirrors the official local-launch template: Type=simple,
-	# Restart=on-failure, absolute ExecStart (systemd does not read the
-	# shell's PATH), EnvironmentFile= at the 0600 secrets.env — never
-	# inlining the token. AUTH POSTURE: QWEN_SERVER_TOKEN auto-generated
-	# at install (fill-empty-only, a hand-set value always wins); the
-	# daemon boots with --require-auth. On a token-less loopback bind
-	# "any local process that can reach the port can use the full
-	# operator API, including executing code as the daemon user" —
-	# emptying the variable by hand reverts to token-less (warned).
-	local rc=0 qwen_bin
-	qwen_bin=$(command -v qwen)
-	local unit_dir="$HOME/.config/systemd/user"
-	mkdir -p "$unit_dir"
-	# The subshell bounds these exports (as at every render site): a leaked
-	# value would let a later render fill a missing reference silently.
-	(
-		export QWEN_BIN="$qwen_bin" QWEN_SERVE_AUTH_FLAG="$serve_auth_flag" QWEN_CHANNEL_ARGS="$channel_args"
-		render \
-			"$AGENT_REPO_ROOT/qwen-code/service/qwen-serve.service.template" \
-			"$unit_dir/qwen-serve.service"
-	) || rc=$?
-	if [ "$rc" -ne 0 ]; then
-		warn "service unit render failed — skipping daemon-reload + enable --now (a stale/broken unit would register). Fix the render error above and re-run, or: systemctl --user daemon-reload && systemctl --user enable --now qwen-serve.service"
-		return "$rc"
-	fi
-	if [ ! -s "$HOME/.config/agent/secrets.env" ]; then
-		warn "qwen-serve.service rendered but NOT enabled — secrets.env is missing or empty (the daemon would boot without its credential env file). Fill it and re-run, or: systemctl --user enable --now qwen-serve.service"
-		return 0
-	fi
-	systemctl --user daemon-reload || {
-		warn "systemctl --user daemon-reload failed — unit rendered but not registered; run it manually."
-		return 1
-	}
-	if systemctl --user enable --now qwen-serve.service 2>/dev/null; then
-		ok "qwen-serve.service enabled and started (systemd user service)."
+# _qwen_render_unit <dest> — render this platform's unit for
+# register_service. The subshell bounds these exports (as at every render
+# site): a leaked value would let a later render fill a missing reference
+# silently. QWEN_SERVICE_PATH is plist-only — launchd does not read shell
+# profiles, so the PATH is frozen at install; re-run install after PATH
+# changes (systemd gets its PATH from the unit file instead).
+_qwen_render_unit() {
+	local exports=(QWEN_BIN="$(command -v qwen)" QWEN_SERVE_AUTH_FLAG="$serve_auth_flag" QWEN_CHANNEL_ARGS="$channel_args")
+	if [ "$(uname -s)" = "Darwin" ]; then
+		(
+			export "${exports[@]}" QWEN_SERVICE_PATH="$PATH"
+			render \
+				"$AGENT_REPO_ROOT/qwen-code/service/com.qwenlm.qwen-serve.plist.template" "$1"
+		)
 	else
-		warn "qwen-serve.service registration failed — enable manually: systemctl --user enable --now qwen-serve.service"
-		rc=1
+		(
+			export "${exports[@]}"
+			render \
+				"$AGENT_REPO_ROOT/qwen-code/service/qwen-serve.service.template" "$1"
+		)
 	fi
-	# Linger keeps the user manager (and the service) alive after logout /
-	# across reboots; best-effort — some setups gate it behind polkit auth.
-	if loginctl enable-linger "$(id -un)" >/dev/null 2>&1; then
-		ok "Linger enabled — the service survives logout and reboots."
-	else
-		info "Linger not enabled (needs auth on some setups) — the service starts at login; enable with: loginctl enable-linger $(id -un)"
-	fi
-	return "$rc"
-}
-
-# _qwen_register_services_macos — render the plist into
-# ~/Library/LaunchAgents/ (0600) and bootstrap it into the user's gui
-# domain (bootout first so re-runs replace a previously loaded agent).
-# Same gate as the Linux path: the agent is only bootstrapped when
-# secrets.env exists and is non-empty (a daemon without its credential
-# env file would crash-loop under keepalive). A failed plist render
-# skips the whole registration (no bootout, no bootstrap).
-_qwen_register_services_macos() {
-	local rc=0 uid
-	local label="com.qwenlm.qwen-serve"
-	local agents_dir="$HOME/Library/LaunchAgents"
-	mkdir -p "$agents_dir"
-	uid=$(id -u)
-	# The plist's PATH (launchd does not read shell profiles): the user's
-	# actual PATH, frozen at install — re-run install after PATH changes.
-	# The subshell bounds these exports (as at every render site): a leaked
-	# value would let a later render fill a missing reference silently.
-	(
-		export QWEN_BIN="$(command -v qwen)" QWEN_SERVICE_PATH="$PATH" QWEN_SERVE_AUTH_FLAG="$serve_auth_flag" QWEN_CHANNEL_ARGS="$channel_args"
-		render \
-			"$AGENT_REPO_ROOT/qwen-code/service/com.qwenlm.qwen-serve.plist.template" \
-			"$agents_dir/$label.plist"
-	) || rc=$?
-	if [ "$rc" -ne 0 ]; then
-		warn "$label.plist render failed — skipping bootout + bootstrap (a stale/broken plist would register). Fix the render error above and re-run, or: launchctl bootstrap gui/$uid $agents_dir/$label.plist"
-		return "$rc"
-	fi
-	if [ ! -s "$HOME/.config/agent/secrets.env" ]; then
-		warn "$label rendered but NOT bootstrapped — secrets.env is missing or empty (the daemon would boot without its credential env file). Fill it and re-run, or: launchctl bootstrap gui/$uid $agents_dir/$label.plist"
-		return 0
-	fi
-	# A bootstrap of an already-bootstrapped label fails; bootout
-	# (best-effort) makes re-runs replace instead of fail.
-	launchctl bootout "gui/$uid/$label" >/dev/null 2>&1 || true
-	if launchctl bootstrap "gui/$uid" "$agents_dir/$label.plist" >/dev/null 2>&1; then
-		ok "$label bootstrapped (launchd user agent)."
-	else
-		warn "$label bootstrap failed — load manually: launchctl bootstrap gui/$uid $agents_dir/$label.plist"
-		rc=1
-	fi
-	return "$rc"
 }
 
 # install_agent_qwen_code — the agent contract function (see lib/agent.sh).
@@ -168,13 +58,13 @@ install_agent_qwen_code() {
 	# Binary (Node.js 22+ and npm via the package manager when missing).
 	_qwen_install_binary || rc=$?
 
-	# QWEN_SERVER_TOKEN is the optional bearer token for the resident serve daemon.
-	# Serve daemon auth posture (research-pinned, see the serve template
-	# headers; informed choice, design "warn, never block"): a set
-	# QWEN_SERVER_TOKEN boots serve with --require-auth and the token
-	# reaches it through secrets.env (0600); without it, the token-less
-	# loopback bind exposes the full operator API (code execution as the
-	# daemon user) to every local process — WARN.
+	# QWEN_SERVER_TOKEN is the optional bearer token for the resident serve
+	# daemon. Auth posture (warn, never block): a set token boots serve with
+	# --require-auth and reaches it through secrets.env (0600); without it the
+	# token-less loopback bind exposes the full operator API — code execution
+	# as the daemon user — to every local process. The installer
+	# auto-generates one into secrets.env (fill-empty-only, so a hand-set value
+	# always wins); emptying the variable by hand reverts to token-less.
 	local serve_auth_flag=""
 	if [ -n "$(secret QWEN_SERVER_TOKEN 2>/dev/null)" ]; then
 		serve_auth_flag=" --require-auth"
@@ -183,43 +73,26 @@ install_agent_qwen_code() {
 		warn "QWEN_SERVER_TOKEN is not set — the serve daemon will run token-less: any local process that can reach 127.0.0.1:4170 can use the full operator API, including executing code as the daemon user. Set QWEN_SERVER_TOKEN and re-run to enable --require-auth."
 	fi
 
-	# settings.json is rendered by gomplate, so §4.2's per-field override
-	# precedence still resolves here — the template only sees resolved values, and
-	# the API key reaches it as a NAME (envKey indirection; never values in
+	# settings.json is rendered by gomplate, so the per-field override
+	# precedence still resolves here — the template only sees resolved values,
+	# and the API key reaches it as a NAME (envKey indirection; never values in
 	# settings.json). Channel members and the optional reasoningEffort key are
 	# structure and live in the template; the working directory is exported raw
 	# because the template JSON-escapes it with toJSON.
-	local eff_key_name="LLM_API_KEY"
-	if [ -n "$(secret QWEN_LLM_API_KEY 2>/dev/null)" ]; then
-		eff_key_name="QWEN_LLM_API_KEY"
-	fi
-	local eff_base eff_model
-	eff_base=$(secret QWEN_LLM_BASE_URL LLM_BASE_URL 2>/dev/null)
-	eff_model=$(secret QWEN_LLM_MODEL LLM_MODEL 2>/dev/null)
-	if [ -z "$(secret QWEN_LLM_API_KEY 2>/dev/null)" ] && [ -z "$(secret LLM_API_KEY 2>/dev/null)" ]; then
-		info "LLM_API_KEY / QWEN_LLM_API_KEY not set — the config references an empty variable; fill ${SECRETS_FILE#"$HOME"/} and re-run."
-	fi
-	# Model catalog: one "id|context|output|efforts|pick" row per model
-	# (llm_model_rows) — the template renders the provider entries from it.
-	# reasoningEffort is a bare VALUE, not a fragment: the template owns the
-	# key and its comma, so a second root-level "model" can no longer win
-	# last-one-wins and silently drop the effort.
-	local model_rows eff_efforts eff_pick
-	model_rows=$(llm_model_rows "$eff_model")
-	eff_efforts=$(resolve_llm_model_caps "$eff_model" | awk 'NR==1 { print $4 }')
+	llm_resolve QWEN
+	local eff_efforts eff_pick
+	eff_efforts=$(resolve_llm_model_caps "$EFF_MODEL" | awk 'NR==1 { print $4 }')
 	eff_pick=$(pick_reasoning_effort "$eff_efforts")
 	# Channel gate flags: the channel worker validates every configured
 	# channel at startup and EXITS on the first empty credential, killing the
 	# rest with it. No credentials -> "channels": {} -> the daemon boots clean.
 	# The flags carry NO secret values — the template embeds the credential
 	# NAME ($QWEN_QQ_APP_ID) and the agent resolves it from secrets.env at boot.
-	local chan_qq="" chan_dingtalk="" channel_args=""
-	if [ -n "$(secret QWEN_QQ_APP_ID 2>/dev/null)" ] && [ -n "$(secret QWEN_QQ_APP_SECRET 2>/dev/null)" ]; then chan_qq=1; fi
-	if [ -n "$(secret QWEN_DINGTALK_ACCESS_TOKEN 2>/dev/null)" ] && [ -n "$(secret QWEN_DINGTALK_SECRET 2>/dev/null)" ]; then chan_dingtalk=1; fi
-	# The --channel argument follows the gates above: --channel all only when
-	# at least one channel is configured — a bare --channel with zero
-	# channels starts a worker that has nothing to run.
-	[ -n "$chan_qq$chan_dingtalk" ] && channel_args=" --channel all"
+	local channel_args=""
+	if secret_pair_set QWEN_QQ_APP_ID QWEN_QQ_APP_SECRET ||
+		secret_pair_set QWEN_DINGTALK_ACCESS_TOKEN QWEN_DINGTALK_SECRET; then
+		channel_args=" --channel all"
+	fi
 
 	# The subshell is not for `|| rc=$?` (identical either way): it bounds these
 	# exports. This hook also renders the service unit, whose template reads some
@@ -228,14 +101,23 @@ install_agent_qwen_code() {
 	(
 		# Only resolved VALUES are exported. Every reference the template
 		# reads must be exported, empty included — gomplate aborts the render
-		# on an unset one and reports the offending names.
-		export QWEN_LLM_BASE_URL="$eff_base" QWEN_LLM_MODEL="$eff_model" \
-			QWEN_LLM_API_KEY_ENV_NAME="$eff_key_name" \
-			QWEN_LLM_MODEL_ROWS="$model_rows" QWEN_LLM_EFFORT="${eff_pick:-}"
-		# The --channel argument is NOT part of the config contract: only the
-		# service unit reads it (see the register helpers), so settings.json does
-		# not get it exported here — the two gate flags above are its inputs.
-		export QWEN_CHANNEL_CWD="$HOME" QWEN_CHANNEL_QQ="$chan_qq" QWEN_CHANNEL_DINGTALK="$chan_dingtalk"
+		# on an unset one and reports the offending names. The --channel
+		# argument is NOT part of the config contract: only the service unit
+		# reads it, so it is not exported here.
+		export QWEN_LLM_BASE_URL="$EFF_BASE" QWEN_LLM_MODEL="$EFF_MODEL" \
+			QWEN_LLM_API_KEY_ENV_NAME="$EFF_KEY_NAME" \
+			QWEN_LLM_MODEL_ROWS="$EFF_ROWS" QWEN_LLM_EFFORT="${eff_pick:-}"
+		export QWEN_CHANNEL_CWD="$HOME"
+		if secret_pair_set QWEN_QQ_APP_ID QWEN_QQ_APP_SECRET; then
+			export QWEN_CHANNEL_QQ=1
+		else
+			export QWEN_CHANNEL_QQ=""
+		fi
+		if secret_pair_set QWEN_DINGTALK_ACCESS_TOKEN QWEN_DINGTALK_SECRET; then
+			export QWEN_CHANNEL_DINGTALK=1
+		else
+			export QWEN_CHANNEL_DINGTALK=""
+		fi
 		render \
 			"$AGENT_REPO_ROOT/qwen-code/settings.json.template" \
 			"$AGENT_HOME/qwen/settings.json"
@@ -258,35 +140,19 @@ install_agent_qwen_code() {
 		link_config "$AGENT_HOME/qwen/settings.json" "$HOME/.qwen/settings.json" takeover || rc=$?
 	fi
 
-	# Resident serve daemon (one process: loopback API + channel
-	#    adapters). Skipped with a WARN when the
-	#    binary is missing (that failure is already reported) or when no
-	#    service manager of the platform is usable.
+	# Resident serve daemon (one process: loopback API + channel adapters).
+	# Skipped with a WARN when the binary is missing (that failure is already
+	# reported) or when no service manager of the platform is usable — both
+	# handled by register_service.
 	if have_native_cmd qwen; then
-		#    DingTalk credentials missing → the channel adapter inside serve
-		#    cannot connect (warned; the daemon itself still boots —
-		#    systemd's start-limit caps any crash-looping).
-		if [ -z "$(secret QWEN_DINGTALK_ACCESS_TOKEN 2>/dev/null)" ] || [ -z "$(secret QWEN_DINGTALK_SECRET 2>/dev/null)" ]; then
+		if ! secret_pair_set QWEN_DINGTALK_ACCESS_TOKEN QWEN_DINGTALK_SECRET; then
 			info "DingTalk credentials not set — the dingtalk channel adapter inside the serve daemon will not connect; fill QWEN_DINGTALK_* in ${SECRETS_FILE#"$HOME"/} and restart the service."
 		fi
-		if [ -z "$(secret QWEN_QQ_APP_ID 2>/dev/null)" ] || [ -z "$(secret QWEN_QQ_APP_SECRET 2>/dev/null)" ]; then
+		if ! secret_pair_set QWEN_QQ_APP_ID QWEN_QQ_APP_SECRET; then
 			info "QQ Bot credentials not set — the qq channel adapter inside the serve daemon will not connect (falls back to QR-code login on first start); fill QWEN_QQ_* in ${SECRETS_FILE#"$HOME"/} and restart the service."
 		fi
-		if [ "$(uname -s)" = "Darwin" ]; then
-			if have_native_cmd launchctl; then
-				_qwen_register_services_macos || rc=$?
-			else
-				warn "launchctl not found — service units rendered later skipped; register manually (see qwen-code/service/ templates)."
-			fi
-		else
-			if systemd_user_available; then
-				_qwen_register_services_linux || rc=$?
-			else
-				warn "No systemd user session (WSL/container?) — skipping resident service registration; the units render on a host with systemd."
-			fi
-		fi
-	else
-		warn "qwen binary not found — skipping resident service registration."
+		register_service qwen-serve.service com.qwenlm.qwen-serve _qwen_render_unit \
+			"Fill secrets.env and re-run, or: systemctl --user enable --now qwen-serve.service (launchctl bootstrap gui/$(id -u) on macOS)" || rc=$?
 	fi
 
 	return "$rc"
