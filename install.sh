@@ -94,14 +94,7 @@ fi
 # resolved against the checkout this file lives in (AGENT_REPO_ROOT).
 . "$(dirname "${BASH_SOURCE[0]:-$0}")/lib/agent.sh"
 
-usage() {
-	cat <<EOF
-Usage: $0 [--with-opencode] [--with-dsh] [--with-qwen-code] [--with-openclaw]
-
-By default all supported agents are installed. Pass one or more --with-
-flags to install only the named agents.
-EOF
-}
+usage() { agent_usage "$0"; }
 
 # ──────────────────────── agent selection ────────────────────────
 # This entry point accepts ONLY the agent-selection flags: everything the
@@ -138,22 +131,18 @@ install_shared_secrets() {
 	# user-supplied or hand-edited value always wins, and the generated
 	# value persists HERE (the single source of truth) so re-runs never
 	# rotate it behind the user's back.
-	local a generated=""
+	local a tok generated=""
 	for a in ${ENABLED_AGENTS[@]+"${ENABLED_AGENTS[@]}"}; do
+		tok=""
 		case "$a" in
-		qwen-code)
-			if [ -z "$(secret QWEN_SERVER_TOKEN 2>/dev/null)" ] && have_native_cmd openssl; then
-				export QWEN_SERVER_TOKEN="$(openssl rand -hex 32)"
-				generated="$generated QWEN_SERVER_TOKEN"
-			fi
-			;;
-		openclaw)
-			if [ -z "$(secret OPENCLAW_GATEWAY_TOKEN 2>/dev/null)" ] && have_native_cmd openssl; then
-				export OPENCLAW_GATEWAY_TOKEN="$(openssl rand -hex 32)"
-				generated="$generated OPENCLAW_GATEWAY_TOKEN"
-			fi
-			;;
+		qwen-code) tok=QWEN_SERVER_TOKEN ;;
+		openclaw) tok=OPENCLAW_GATEWAY_TOKEN ;;
 		esac
+		if [ -n "$tok" ] && have_native_cmd openssl &&
+			[ -z "$(secret "$tok" 2>/dev/null)" ]; then
+			export "$tok=$(openssl rand -hex 32)"
+			generated="$generated $tok"
+		fi
 	done
 	if [ -n "$generated" ]; then
 		info "Auto-generated daemon tokens:$generated (openssl rand -hex 32; rotate by hand in ${SECRETS_FILE#"$HOME"/})."
@@ -192,11 +181,11 @@ install_step_prepare() {
 	install_shared_secrets
 	# Warm the models.dev cache once, here, in the installer process — this is
 	# the one place that works: install_step_tool → run_agent_hook calls each
-	# hook in THIS shell, so the four agents inherit what this single fetch
-	# stores, while a fetch inside $(llm_model_rows …) would die with its
-	# subshell (measured: 4 downloads vs 1). The fallback inside
-	# resolve_llm_model_caps stays for callers that skip this step; a failure
-	# is never sticky, so each agent still gets a cheap probe.
+	# hook in THIS shell, so every enabled agent inherits what this single
+	# fetch stores, while a fetch inside $(llm_model_rows …) would die with its
+	# subshell. The fallback inside resolve_llm_model_caps stays for callers
+	# that skip this step; a failure is never sticky, so each agent still gets
+	# a cheap probe.
 	modelsdev_fetch
 	echo ""
 }
@@ -247,11 +236,11 @@ for _summary_agent in ${ENABLED_AGENTS[@]+"${ENABLED_AGENTS[@]}"}; do
 		SUMMARY_LINES+=("  OpenCode: ${CYAN}~/.config/opencode/opencode.json${NC} → ${AGENT_HOME#"$HOME"/}/opencode.json")
 		;;
 	dsh)
-		SUMMARY_LINES+=("  DSH:      ${CYAN}~/.dsh/profiles/web/cordis.patch.yml${NC} (web profile + 4 plugins)")
+		SUMMARY_LINES+=("  DSH:      ${CYAN}~/.dsh/profiles/web/cordis.patch.yml${NC} (web profile, plugins from dsh/plugins.txt)")
 		;;
 	qwen-code)
-		if [ "$(uname -s)" = "Darwin" ]; then
-			SUMMARY_LINES+=("  Qwen:     ${CYAN}launchctl print gui/$(id -u)/com.qwenlm.qwen-serve${NC}")
+		if [ "$_summary_darwin" -eq 1 ]; then
+			SUMMARY_LINES+=("  Qwen:     ${CYAN}launchctl print gui/$_summary_uid/com.qwenlm.qwen-serve${NC}")
 		else
 			SUMMARY_LINES+=("  Qwen:     ${CYAN}systemctl --user status qwen-serve.service${NC}")
 		fi
