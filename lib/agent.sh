@@ -388,9 +388,6 @@ resolve_llm_models() {
 # configure for a model, empty when it declares none ("-" or blank). Prefers
 # "high", falls back to "xhigh": both sit inside the ladder every gateway
 # accepts, anything else risks a 400 on the first request.
-# (This helper was being called by the qwen-code and opencode install hooks
-# with no definition anywhere in the repo — the call sites died with
-# "command not found" under `set -e`.)
 pick_reasoning_effort() {
 	local e
 	[ -n "${1:-}" ] && [ "$1" != "-" ] || return 0
@@ -560,43 +557,302 @@ systemd_user_available() {
 	systemctl --user show-environment >/dev/null 2>&1
 }
 
-# ──────────────────────── agent contract ────────────────────────
-# Every agent lives in one top-level folder named after it (opencode, dsh,
-# qwen-code, openclaw). The folder's install.sh defines
-# install_agent_<folder_name_with_underscores>() and its checkhealth.sh
-# defines checkhealth_agent_<same>() — the entry points loop over
-# ENABLED_AGENTS, source the folder's file and call the function. Adding an
-# agent means adding a folder, never touching the skeleton.
+# ──────────────────── shared per-agent scaffolding ────────────────────
+# The four shapes every agent hook repeats: the Node floor, an npm-delivered
+# binary, a credential pair, and one resident service. They live here so a
+# change lands once; the agent folders pass names and their own wording.
 
-# parse_agent_flags "$@" — split an argument list: --with-* flags fill
-# ENABLED_AGENTS (deduped), everything else lands in _AGENT_REST for the
-# caller to validate or pass through. No --with- flag at all is resolved
-# by resolve_enabled_agents below (default: all four).
+# node_floor_check <label> <floor> — report the shared Node runtime floor.
+# Non-zero when node is missing or below <floor> (a too-old runtime is a real
+# failure, not advisory — the caller folds it into its rc).
+node_floor_check() {
+	local label="$1" floor="$2"
+	if ! have_native_cmd node; then
+		warn "node not found — $label requires Node.js $floor+: $(get_install_hint node)"
+		return 1
+	fi
+	ok "node version: $(node -v 2>/dev/null)"
+	if ! bin_at_least node "$floor"; then
+		warn "node is older than $floor — $label requires Node.js $floor+; upgrade it: $(get_install_hint node)"
+		return 1
+	fi
+	return 0
+}
+
+# binary_version_check <bin> <version-regex> <install-hint> — the binary must
+# exist AND print a version matching <regex>: an unparsable --version is as
+# useless to the operator's summary as a missing one.
+binary_version_check() {
+	local bin="$1" re="$2" hint="$3" ver
+	if ! have_native_cmd "$bin"; then
+		warn "$bin binary not found — install it: $hint"
+		return 1
+	fi
+	ver=$(extract_version "$bin" "$re")
+	if [ -z "$ver" ]; then
+		warn "$bin found but --version produced no parsable output."
+		return 1
+	fi
+	ok "$bin version: $ver"
+	return 0
+}
+
+# secret_pair_set <VAR1> <VAR2> — 0 when BOTH resolve non-empty. Names only,
+# never values (secret() reports set/unset to stderr, so stdout stays clean).
+secret_pair_set() {
+	[ -n "$(secret "$1" 2>/dev/null)" ] && [ -n "$(secret "$2" 2>/dev/null)" ]
+}
+
+# llm_resolve <PREFIX> — resolve one agent's effective LLM settings through
+# the per-field override layer and fill EFF_KEY_NAME / EFF_BASE / EFF_MODEL /
+# EFF_ROWS for the caller to export. render() only substitutes references, it
+# cannot apply the precedence itself, so the resolution happens here. The
+# API key travels as a NAME (envKey/{env:VAR}/apiKeyEnv indirection) — which
+# name is decided here; the values (base URL, model) are public by default and
+# machine-local otherwise. EFF_ROWS is the "id|context|output|efforts|pick"
+# catalog the templates iterate over.
+llm_resolve() {
+	local p="$1"
+	_check_var_name "$p"
+	EFF_KEY_NAME="LLM_API_KEY"
+	if [ -n "$(secret "${p}_LLM_API_KEY" 2>/dev/null)" ]; then
+		EFF_KEY_NAME="${p}_LLM_API_KEY"
+	fi
+	EFF_BASE=$(secret "${p}_LLM_BASE_URL" LLM_BASE_URL 2>/dev/null)
+	EFF_MODEL=$(secret "${p}_LLM_MODEL" LLM_MODEL 2>/dev/null)
+	if [ -z "$(secret "${p}_LLM_API_KEY" 2>/dev/null)" ] &&
+		[ -z "$(secret LLM_API_KEY 2>/dev/null)" ]; then
+		info "LLM_API_KEY / ${p}_LLM_API_KEY not set — the config references an empty variable; fill ${SECRETS_FILE#"$HOME"/} (or export it before re-running) and re-run."
+	fi
+	EFF_ROWS=$(llm_model_rows "$EFF_MODEL")
+	return 0
+}
+
+# npm_agent_install <bin> <npm-spec> <node-floor> <manual-hint> [FALLBACK_FN]
+# — the shared install lane: idempotent presence check, then the Node floor
+# (ensure_node_at_least returns 0 only once bin_at_least passes, so no second
+# probe), then npm_install_g — the framework's prefix/retry/--allow-scripts
+# wrapper, one upgrade path for every agent. A successful npm run whose bin is
+# not on THIS shell's PATH degrades to a hint (a new shell picks it up).
+# [FALLBACK_FN] gets one more attempt before the manual hint.
+npm_agent_install() {
+	local bin="$1" spec="$2" floor="$3" hint="$4" fb="${5:-}" rc=0
+	if have_native_cmd "$bin"; then
+		ok "$bin already installed."
+		return 0
+	fi
+	if ! ensure_node_at_least "$floor"; then
+		warn "Node.js $floor+ is required but not available — install it manually: $(get_install_hint node)"
+		return 1
+	fi
+	info "Installing $bin (npm_install_g $spec)..."
+	npm_install_g "$spec" || rc=$?
+	if [ "$rc" -ne 0 ] && [ -n "$fb" ]; then
+		rc=0
+		"$fb" || rc=$?
+	fi
+	if [ "$rc" -ne 0 ]; then
+		warn "$bin installation failed (rc $rc) — install it manually: $hint"
+		return 1
+	fi
+	if have_native_cmd "$bin"; then
+		return 0
+	fi
+	warn "$bin installed but not on this shell's PATH — open a new shell (npm's global bin directory)."
+	return 0
+}
+
+# service_state <systemd-unit> <launchd-label> — one vocabulary for both
+# platforms: active | activating | inactive | unregistered | unknown.
+# "activating" under Restart=on-failure is a crash-loop — the process dies and
+# systemd keeps restarting it, and is-active also prints "active" briefly
+# between crashes, so it must never read as healthy.
+service_state() {
+	local unit="$1" label="$2" state=""
+	if [ "$(uname -s)" = "Darwin" ]; then
+		[ -f "$HOME/Library/LaunchAgents/$label.plist" ] || {
+			printf 'unregistered'
+			return 0
+		}
+		if launchctl print "gui/$(id -u)/$label" 2>/dev/null | grep -q '"state" = "running"'; then
+			printf 'active'
+		else
+			printf 'inactive'
+		fi
+		return 0
+	fi
+	if ! systemd_user_available; then
+		printf 'unknown'
+		return 0
+	fi
+	[ -f "$HOME/.config/systemd/user/$unit" ] || {
+		printf 'unregistered'
+		return 0
+	}
+	state=$(systemctl --user is-active "$unit" 2>/dev/null) || state=""
+	case "$state" in
+	active | activating) printf '%s' "$state" ;;
+	*) printf 'inactive' ;;
+	esac
+	return 0
+}
+
+# service_health <display-name> <systemd-unit> <launchd-label> — WARN-only
+# reporter: an unattended machine may legitimately keep the resident service
+# stopped, so nothing here fails the health run — it is still surfaced.
+service_health() {
+	local kind="$1" unit="$2" label="$3" state
+	state=$(service_state "$unit" "$label")
+	case "$state" in
+	active) ok "$kind is running." ;;
+	unregistered) warn "$kind is not registered — re-run the installer to register the resident service." ;;
+	activating) warn "$kind is crash-looping (systemd keeps restarting it) — check logs: journalctl --user -u $unit (typical cause: credentials missing/incomplete)." ;;
+	inactive) warn "$kind is registered but not active — check logs (journalctl --user -u $unit / ~/Library/Logs)." ;;
+	*) warn "$kind: no systemd user session — service state unknown (WSL/container?)." ;;
+	esac
+	return 0
+}
+
+# register_service <systemd-unit> <launchd-label> <render-fn> <manual-hint> —
+# platform dispatch plus the whole registration ceremony, shared by every
+# resident service:
+#   * <render-fn> <dest> renders the platform's unit into <dest>; it owns the
+#     export bounding, because a leaked render export would let a later render
+#     fill a missing reference from an earlier value instead of aborting.
+#   * A failed render skips registration entirely: daemon-reload would load a
+#     stale/broken unit into the manager, and macOS must not bootout a working
+#     agent on the way to a failed bootstrap.
+#   * No usable manager for this platform: WARN + return 0 (nothing to
+#     register — the unit renders on a host that has one).
+#   * Linux always reloads and always sets linger; the rendered file must not
+#     sit unregistered with the manager holding an older copy, and linger keeps
+#     the user manager alive for a service enabled later by hand. Enable+start
+#     is the only step gated on SECRETS_FILE being non-empty — a daemon without
+#     its credential env file crash-loops under Restart=on-failure.
+#   * macOS bootstraps only with credentials; bootout first so re-runs replace
+#     a previously loaded agent instead of failing.
+# Returns non-zero when the manager itself refuses.
+register_service() {
+	local unit="$1" label="$2" render_fn="$3" hint="$4" dest rc=0
+	if [ "$(uname -s)" = "Darwin" ]; then
+		if ! have_native_cmd launchctl; then
+			warn "launchctl not found — resident service registration skipped; register manually (see the service templates)."
+			return 0
+		fi
+		dest="$HOME/Library/LaunchAgents/$label.plist"
+		mkdir -p "$HOME/Library/LaunchAgents"
+		if ! "$render_fn" "$dest"; then
+			warn "$label.plist render failed — skipping bootout + bootstrap (a stale/broken plist would register). $hint"
+			return 1
+		fi
+		if [ ! -s "$SECRETS_FILE" ]; then
+			warn "$label rendered but NOT bootstrapped — secrets.env is missing or empty (the daemon would boot without its credential env file). $hint"
+			return 0
+		fi
+		# A bootstrap of an already-bootstrapped label fails; bootout
+		# (best-effort) makes re-runs replace instead of fail.
+		launchctl bootout "gui/$(id -u)/$label" >/dev/null 2>&1 || true
+		if launchctl bootstrap "gui/$(id -u)" "$dest" >/dev/null 2>&1; then
+			ok "$label bootstrapped (launchd user agent)."
+		else
+			warn "$label bootstrap failed — load manually: launchctl bootstrap gui/$(id -u) $dest"
+			rc=1
+		fi
+		return "$rc"
+	fi
+	if ! systemd_user_available; then
+		warn "No systemd user session (WSL/container?) — skipping resident service registration; the units render on a host with systemd."
+		return 0
+	fi
+	dest="$HOME/.config/systemd/user/$unit"
+	mkdir -p "$HOME/.config/systemd/user"
+	if ! "$render_fn" "$dest"; then
+		warn "$unit render failed — skipping daemon-reload + enable --now (a stale/broken unit would register). $hint"
+		return 1
+	fi
+	if ! systemctl --user daemon-reload; then
+		warn "systemctl --user daemon-reload failed — unit rendered but not registered; run it manually."
+		return 1
+	fi
+	if [ -s "$SECRETS_FILE" ]; then
+		if systemctl --user enable --now "$unit" 2>/dev/null; then
+			ok "$unit enabled and started (systemd user service)."
+		else
+			warn "$unit registration failed — enable manually: systemctl --user enable --now $unit"
+			rc=1
+		fi
+	else
+		warn "$unit rendered but NOT enabled — secrets.env is missing or empty (the daemon would boot without its credential env file). $hint"
+	fi
+	# Best-effort: some setups gate linger behind polkit auth, which would sit
+	# on an interactive prompt in the middle of an unattended install.
+	if loginctl enable-linger "$(id -un)" >/dev/null 2>&1; then
+		ok "Linger enabled — the service survives logout and reboots."
+	else
+		info "Linger not enabled (needs auth on some setups) — the service starts at login; enable with: loginctl enable-linger $(id -un)"
+	fi
+	return "$rc"
+}
+
+# ──────────────────────── agent contract ────────────────────────
+# Every agent lives in one top-level folder named after it. The folder's
+# install.sh defines install_agent_<folder_name_with_underscores>() and its
+# checkhealth.sh defines checkhealth_agent_<same>() — the entry points loop
+# over ENABLED_AGENTS, source the folder's file and call the function.
+# Adding an agent means adding a folder plus its name in ALL_AGENTS; the
+# --with-* flags, the default enable set and the usage text all derive from
+# this one list, so the skeleton has no per-agent literals left to update.
+ALL_AGENTS=(opencode dsh qwen-code openclaw)
+
+# parse_agent_flags "$@" — split an argument list: a --with-<agent> flag
+# naming a folder in ALL_AGENTS fills ENABLED_AGENTS (deduped, in flag
+# order); everything else — an unknown --with-* included — lands in
+# _AGENT_REST for the caller to validate or pass through.
 parse_agent_flags() {
 	ENABLED_AGENTS=()
 	_AGENT_REST=()
-	local a i skip
+	local a i dup
 	while [ $# -gt 0 ]; do
+		a=""
 		case "$1" in
-		--with-opencode | --with-dsh | --with-qwen-code | --with-openclaw)
-			a="${1#--with-}"
-			skip=0
-			for i in ${ENABLED_AGENTS[@]+"${ENABLED_AGENTS[@]}"}; do
-				if [ "$i" = "$a" ]; then skip=1; fi
+		--with-*)
+			for i in ${ALL_AGENTS[@]+"${ALL_AGENTS[@]}"}; do
+				if [ "$1" = "--with-$i" ]; then a="$i"; fi
 			done
-			if [ "$skip" = 0 ]; then ENABLED_AGENTS+=("$a"); fi
 			;;
-		*) _AGENT_REST+=("$1") ;;
 		esac
+		if [ -n "$a" ]; then
+			dup=0
+			for i in ${ENABLED_AGENTS[@]+"${ENABLED_AGENTS[@]}"}; do
+				if [ "$i" = "$a" ]; then dup=1; fi
+			done
+			if [ "$dup" -eq 0 ]; then ENABLED_AGENTS+=("$a"); fi
+		else
+			_AGENT_REST+=("$1")
+		fi
 		shift
 	done
 }
 
-# resolve_enabled_agents — apply the "default: all four" rule after
-# parse_agent_flags.
+# resolve_enabled_agents — apply the "default: every agent in ALL_AGENTS"
+# rule after parse_agent_flags.
 resolve_enabled_agents() {
 	if [ "${#ENABLED_AGENTS[@]}" -gt 0 ]; then return 0; fi
-	ENABLED_AGENTS=(opencode dsh qwen-code openclaw)
+	ENABLED_AGENTS=(${ALL_AGENTS[@]+"${ALL_AGENTS[@]}"})
+}
+
+# agent_usage <entry-name> [extra-flags] — the shared usage block of both
+# entry points; the flag list is generated from ALL_AGENTS so help can never
+# drift from the roster. <extra-flags> is the entry point's own tail
+# (checkhealth adds --install / --skip-check-config).
+agent_usage() {
+	local a flags=""
+	for a in ${ALL_AGENTS[@]+"${ALL_AGENTS[@]}"}; do
+		flags="$flags [--with-$a]"
+	done
+	printf 'Usage: %s%s\n\nBy default all supported agents are installed. Pass one or more --with-\nflags to install only the named agents.\n' "$1" "$flags"
+	[ -n "${2:-}" ] && printf '%s\n' "$2"
+	return 0
 }
 
 # run_agent_hook <install|checkhealth> <folder> — source the folder's hook
