@@ -61,33 +61,15 @@ _dsh_web_smoke() {
 checkhealth_agent_dsh() {
 	local rc=0
 
-	# Node.js 22+ floor.
-	if have_native_cmd node; then
-		ok "node version: $(node -v 2>/dev/null)"
-		if ! bin_at_least node 22; then
-			warn "node is older than 22 — dsh requires Node.js 22+; upgrade it: $(get_install_hint node)"
-			rc=1
-		fi
-	else
-		warn "node not found — dsh requires Node.js 22+: $(get_install_hint node)"
-		rc=1
-	fi
+	node_floor_check dsh 22 || rc=1
 
-	# Binary + version.
-	if have_native_cmd dsh; then
-		local ver
-		ver=$(extract_version dsh '[0-9]+\.[0-9]+\.[0-9]+[^ ]*')
-		if [ -n "$ver" ]; then
-			ok "dsh version: $ver"
-		else
-			warn "dsh found but --version produced no parsable output."
-			rc=1
-		fi
-		# Web profile smoke (skipped above when the binary is missing —
-		#    that failure is already reported).
+	# Binary + version, and the web-profile smoke only when the binary is
+	# actually there (a missing one is already reported; starting a server to
+	# probe it would just add a second symptom).
+	if binary_version_check dsh '[0-9]+\.[0-9]+\.[0-9]+[^ ]*' \
+		"npm install -g @deepseek-ai/dsh"; then
 		_dsh_web_smoke || rc=$?
 	else
-		warn "dsh binary not found — install it: npm install -g @deepseek-ai/dsh"
 		rc=1
 	fi
 
