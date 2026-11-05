@@ -21,9 +21,9 @@ PROJECT=monkey-agent
 . "$(dirname "${BASH_SOURCE[0]:-$0}")/lib/agent.sh"
 
 # ──────────────────────── agent selection ────────────────────────
-# Same --with-* flags as install.sh (default: all four); the framework's
-# own flags (-i/--install, --skip-check-config, -h/--help) pass through to
-# checkhealth_main untouched, anything else is a usage error.
+# Same --with-* flags as install.sh (default: every agent in ALL_AGENTS); the
+# framework's own flags (-i/--install, --skip-check-config, -h/--help) pass
+# through to checkhealth_main untouched, anything else is a usage error.
 parse_agent_flags "$@"
 for _arg in ${_AGENT_REST[@]+"${_AGENT_REST[@]}"}; do
 	case "$_arg" in
@@ -51,7 +51,7 @@ MAIN_VERSION_TITLE="node"
 #                   hooks, so a fresh machine must not FAIL here)
 REQUIRED_CHECKS=(
 	"@header|Required tools"
-	"gomplate|ver:5.3|gomplate (config template rendering)"
+	"gomplate|ver:5.3|gomplate (config template rendering)|pkg,brew:gomplate"
 	"python3|bin|python3 (health probes)"
 )
 
