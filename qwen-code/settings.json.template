@@ -4,7 +4,7 @@
     "approvalMode": "default"
   },
   "permissions": {
-    "allow": ["run_shell_command", "monitor", "write_file", "edit", "read_file"],
+    "allow": ["run_shell_command", "monitor", "write_file", "edit", "read_file", "artifact"],
     "ask": ["run_shell_command(tmux kill-server*)"]
   },
   "modelProviders": {
