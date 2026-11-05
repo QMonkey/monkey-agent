@@ -9,3 +9,7 @@ secrets.env
 *.swp
 *~
 .DS_Store
+
+# Qwen Code session scratch created when a session runs with this checkout
+# as its project root (one-off probes, render sandboxes) — never project code.
+.qwen/
