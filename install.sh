@@ -178,6 +178,21 @@ install_shared_secrets() {
 
 install_step_prepare() {
 	ensure_git
+	# Provision the renderer before install_step_tool, where its consumers
+	# run: every agent hook renders its config and its service unit with
+	# gomplate, while the framework's dependency pass runs AFTER that step —
+	# so a host that never had gomplate failed every render yet still
+	# finished green. ensure_git comes first because a lane may have to clone
+	# Homebrew. install_pkg, not install_strategy: this process loads no
+	# lib/checks.sh, so probe_spec does not exist, and probe_spec is exactly
+	# what makes install_strategy stop — called here it would walk every lane
+	# and report failure even after a bottle landed. The guard is load-bearing
+	# because install_pkg does not skip a name that is already installed, so
+	# without it every re-run re-asks the chain. Not fatal on purpose: the
+	# hooks still install their agent binaries, and each render failure is
+	# collected and named.
+	have_native_cmd gomplate || install_pkg gomplate ||
+		record_agent_failure "gomplate unavailable before the agent step — no agent config can render; install it and re-run"
 	install_shared_secrets
 	# Warm the models.dev cache once, here, in the installer process — this is
 	# the one place that works: install_step_tool → run_agent_hook calls each
