@@ -15,7 +15,7 @@ set -euo pipefail
 
 # ──────────────────────── repository identity ────────────────────────
 # Declared before the framework is sourced: the bootstrap below needs both
-# values, and clones into the very directory clone_monkey_project would
+# values, and clones into the very directory clone_project would
 # have used — one clone per run, not two.
 PROJECT=monkey-agent
 PROJECT_REPO=https://github.com/QMonkey/monkey-agent.git
@@ -34,15 +34,15 @@ if [ ! -f "$_monkey_scripts/install.sh" ]; then
 		# Outdated checkout: update it in place and keep running from it.
 		git -C "$_monkey_dir" pull --ff-only || true
 		if [ ! -f "$_monkey_dir/scripts/install.sh" ]; then
-			echo "monkey-scripts missing from $_monkey_dir (no scripts/ subtree)." >&2
-			echo "  git -C $_monkey_dir pull    # outdated checkout — or the repo never added the subtree" >&2
+			printf '%s\n' "monkey-scripts missing from $_monkey_dir (no scripts/ subtree)." >&2
+			printf '%s\n' "  git -C $_monkey_dir pull    # outdated checkout — or the repo never added the subtree" >&2
 			exit 1
 		fi
 		_monkey_scripts="$_monkey_dir/scripts"
 	else
 		# curl|bash or a .git-less directory: the only path to a
 		# same-revision scripts/ is the INSTALL_DIR checkout.
-		# clone_monkey_project cannot do this job — it lives in the very
+		# clone_project cannot do this job — it lives in the very
 		# scripts/ being fetched. INSTALL_DIR is where the framework's clone
 		# step would have put the checkout too, so that step only confirms it.
 		if [ -d "$INSTALL_DIR/.git" ]; then
@@ -50,19 +50,19 @@ if [ ! -f "$_monkey_scripts/install.sh" ]; then
 			git -C "$INSTALL_DIR" pull --ff-only || true
 		elif [ -d "$INSTALL_DIR" ] && [ -n "$(ls -A "$INSTALL_DIR")" ]; then
 			# git clone would refuse too, so say why in our own words.
-			echo "$INSTALL_DIR is not empty and is not a git clone." >&2
-			echo "  move it aside, delete it, or set INSTALL_DIR elsewhere." >&2
+			printf '%s\n' "$INSTALL_DIR is not empty and is not a git clone." >&2
+			printf '%s\n' "  move it aside, delete it, or set INSTALL_DIR elsewhere." >&2
 			exit 1
 		else
 			# Fresh clone — the ONLY sub-branch where git is hard-required:
 			# the pull sub-branch above degrades gracefully without it, and
 			# a zip/tarball must not fail here just for a missing git.
 			if ! command -v git >/dev/null 2>&1; then
-				echo "git is required to clone $PROJECT — install it first (e.g. sudo apt-get install git), then re-run." >&2
+				printf '%s\n' "git is required to clone $PROJECT — install it first (e.g. sudo apt-get install git), then re-run." >&2
 				exit 1
 			fi
 			# No retry() available yet — the framework loads only after this
-			# clone succeeds — so inline the standard 3 attempts. A failed
+			# clone succeeds — so inline three attempts. A failed
 			# clone leaves a partial directory behind; remove it so the next
 			# attempt cannot trip over "already exists". This branch only
 			# runs on a fresh install (INSTALL_DIR did not exist or was
@@ -89,7 +89,7 @@ fi
 . "$_monkey_scripts/install.sh"
 
 # ──────────────────────── layout & data ────────────────────────
-# Shared agent helpers (secrets.env, template rendering, links) — sourced
+# Shared agent helpers (agent.env, template rendering, links) — sourced
 # after the framework so the output helpers exist. Agent folders are
 # resolved against the checkout this file lives in (AGENT_REPO_ROOT).
 . "$(dirname "${BASH_SOURCE[0]:-$0}")/lib/agent.sh"
@@ -108,7 +108,7 @@ if [ "${#_AGENT_REST[@]}" -gt 0 ]; then
 		exit 0
 		;;
 	*)
-		echo "Unknown option: ${_AGENT_REST[0]}" >&2
+		printf '%s\n' "Unknown option: ${_AGENT_REST[0]}" >&2
 		usage >&2
 		exit 2
 		;;
@@ -119,8 +119,9 @@ resolve_enabled_agents
 # ──────────────────────── project steps ────────────────────────
 
 # Step 1: the shared local-state scaffolding, agent-independent:
-# ~/.config/agent/, secrets.env (written with or without values — the
-# install never blocks on a missing secret), and the .zshrc source line.
+# ~/.config/agent/ and ~/.config/env/agent.env (written with or without
+# values — the install never blocks on a missing secret), and the .zprofile
+# source line.
 install_shared_secrets() {
 	mkdir -p "$AGENT_HOME"
 	# Daemon tokens: auto-generate when unset — a random secret is the
@@ -152,7 +153,7 @@ install_shared_secrets() {
 	# missing. This merge is the ONLY source of that floor — the template
 	# leaves the line empty so fill mode takes this value instead of a seeded
 	# default — so it must stay ahead of write_secrets_template below.
-	# checkhealth re-asserts the floor on the rendered file.
+	# checkhealth guards the floor in the file (warn, never rewrite).
 	local _np="${NO_PROXY:-}" _d
 	for _d in localhost 127.0.0.1 ::1; do
 		case ",$_np," in
@@ -202,7 +203,7 @@ install_step_prepare() {
 	# that skip this step; a failure is never sticky, so each agent still gets
 	# a cheap probe.
 	modelsdev_fetch
-	echo ""
+	printf '\n'
 }
 
 # Step 2: the agents themselves — folder discovery over ENABLED_AGENTS.
@@ -215,7 +216,7 @@ install_step_tool() {
 		info "Agent: $agent"
 		run_agent_hook install "$agent"
 	done
-	echo ""
+	printf '\n'
 }
 
 # Step 3 (right before the completion summary): surface everything the run
@@ -239,7 +240,7 @@ install_step_after() {
 # shellcheck disable=SC2034  # consumed by the framework's finish_install
 SUMMARY_LINES=(
 	"  Secrets:  ${CYAN}${SECRETS_FILE#"$HOME"/}${NC} (fill by hand, or re-run with the variables exported)"
-	"  Config:   ${CYAN}${AGENT_HOME#"$HOME"/}/${NC} (rendered configs + secrets.env)"
+	"  Config:   ${CYAN}${AGENT_HOME#"$HOME"/}/${NC} (rendered configs)"
 )
 
 _summary_darwin=0
@@ -248,7 +249,7 @@ _summary_uid=$(id -u 2>/dev/null || true)
 for _summary_agent in ${ENABLED_AGENTS[@]+"${ENABLED_AGENTS[@]}"}; do
 	case "$_summary_agent" in
 	opencode)
-		SUMMARY_LINES+=("  OpenCode: ${CYAN}~/.config/opencode/opencode.json${NC} → ${AGENT_HOME#"$HOME"/}/opencode.json")
+		SUMMARY_LINES+=("  OpenCode: ${CYAN}~/.config/opencode/opencode.json${NC} → ${AGENT_HOME#"$HOME"/}/opencode/opencode.json")
 		;;
 	dsh)
 		SUMMARY_LINES+=("  DSH:      ${CYAN}~/.dsh/profiles/web/cordis.patch.yml${NC} (web profile, plugins from dsh/plugins.txt)")
@@ -271,7 +272,7 @@ for _summary_agent in ${ENABLED_AGENTS[@]+"${ENABLED_AGENTS[@]}"}; do
 done
 SUMMARY_LINES+=(
 	""
-	"  Shell:    ${CYAN}exec zsh${NC} — pick up the secrets.env source block (and new PATHs)"
+	"  Shell:    ${CYAN}exec zsh${NC} — pick up the agent.env source block (and new PATHs)"
 	"  Update:   ${CYAN}cd $INSTALL_DIR && git pull${NC}, then re-run this installer"
 )
 
