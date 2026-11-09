@@ -4,8 +4,8 @@
 # run_agent_hook: defines install_agent_opencode() and nothing else runs at
 # source time. Install does four things: registers this agent's override
 # vars (via the shared write_secrets_template call), ensures the binary,
-# renders opencode.json.template → ~/.config/agent/opencode.json, and links
-# it to ~/.config/opencode/opencode.json.
+# renders opencode.json.template → ~/.config/agent/opencode/opencode.json,
+# and links it to ~/.config/opencode/opencode.json.
 #
 # Pitfalls this file encodes:
 #   - The API key is NEVER rendered as a value: the config carries OpenCode's
@@ -64,7 +64,7 @@ install_agent_opencode() {
 
 	# Render the config. render resolves references only — it cannot apply the
 	#    per-field override precedence itself, so the effective values are
-	#    resolved here via llm_resolve (the real secrets.env stays untouched).
+	#    resolved here via llm_resolve (the real agent.env stays untouched).
 	#    The model catalog rows carry the reasoning flag and the options block,
 	#    which appears only when the model declares a safe tier (an effort sent
 	#    to a model that does not declare one risks a gateway 400).
@@ -84,8 +84,9 @@ install_agent_opencode() {
 	) || rc=$?
 
 	# Link the rendered file into OpenCode's config location (creates
-	#    ~/.config/opencode if needed; a foreign regular file already there
-	#    is backed up to <dst>.pre-agent.bak — this repo owns opencode.json).
+	#    ~/.config/opencode if needed; link_config's takeover mode moves a
+	#    foreign regular file there to <dst>.link-bak first — this repo owns
+	#    opencode.json).
 	mkdir -p "$HOME/.config/opencode"
 	link_config "$rendered" "$HOME/.config/opencode/opencode.json" takeover || rc=$?
 
