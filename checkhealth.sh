@@ -9,15 +9,15 @@ set -euo pipefail
 # ──────────────────────────────────────────────────────────────
 
 . "$(dirname "${BASH_SOURCE[0]:-$0}")/scripts/checkhealth.sh" || {
-	echo "monkey-scripts not found — update this checkout (git pull / re-clone)," >&2
-	echo "or run install.sh, which bootstraps monkey-scripts itself." >&2
+	printf '%s\n' "monkey-scripts not found — update this checkout (git pull / re-clone)," >&2
+	printf '%s\n' "or run install.sh, which bootstraps monkey-scripts itself." >&2
 	exit 1
 }
 
 # ──────────────────────── identity ────────────────────────
 PROJECT=monkey-agent
 
-# Shared agent helpers (secrets.env probing, the agent contract hooks).
+# Shared agent helpers (agent.env probing, the agent contract hooks).
 . "$(dirname "${BASH_SOURCE[0]:-$0}")/lib/agent.sh"
 
 # ──────────────────────── agent selection ────────────────────────
@@ -29,7 +29,7 @@ for _arg in ${_AGENT_REST[@]+"${_AGENT_REST[@]}"}; do
 	case "$_arg" in
 	-i | --install | --skip-check-config | -h | --help) ;;
 	*)
-		echo "Unknown option: $_arg" >&2
+		printf '%s\n' "Unknown option: $_arg" >&2
 		exit 2
 		;;
 	esac
@@ -38,9 +38,10 @@ resolve_enabled_agents
 
 # ──────────────────────── version gate ────────────────────────
 # node: shared runtime floor for dsh / qwen-code / openclaw (opencode ships
-# its own binary). Higher per-agent floors (openclaw wants 26.12+) and the
-# NodeSource/brew upgrade paths live in the agent install hooks — this spec
-# is the distro-package best effort (pkg.sh maps node → nodejs per distro).
+# its own binary). Higher per-agent floors (openclaw wants 26.12+) are passed
+# by the agent install hooks to ensure_node_at_least, which owns the upgrade
+# path (distro package, then Homebrew) — this spec is the distro-package best
+# effort (distro.sh maps node → nodejs per distro).
 MAIN_VERSION="node|ver:22|Node.js (agents' runtime)|pkg"
 MAIN_VERSION_TITLE="node"
 
@@ -73,8 +74,7 @@ OPTIONAL_CHECKS=(
 # Each agent folder registers its own sections by defining
 # checkhealth_agent_<name_with_underscores> in <folder>/checkhealth.sh; this hook
 # runs every enabled agent's function. The skeleton tolerates folders that
-# have not landed yet (later tasks add them): a missing checkhealth.sh is a
-# WARN, never a failure.
+# have not landed yet: a missing checkhealth.sh is a WARN, never a failure.
 checkhealth_extra() {
 	local agent
 	secrets_egress_guard
@@ -88,25 +88,25 @@ checkhealth_extra() {
 # sweep cannot run past it — override instead. Output and exit status match
 # the framework's, plus the collected AGENT_FAILURES list (the mirror of
 # install.sh's install_step_after): any collected failure — a broken agent
-# hook or a failed connectivity check (spec §4.6) — makes the health run
+# hook or a failed connectivity check — makes the health run
 # exit 1. Failures are still never fatal mid-run: the whole run completes
 # first, then everything is reported together here.
 print_summary() {
 	local f rc=0
 	if [ "$REQUIRED_FAILURES" -eq 0 ]; then
-		echo -e "${GREEN}${BOLD}All required dependencies satisfied.${NC}"
+		printf '%s\n' "${GREEN}${BOLD}All required dependencies satisfied.${NC}"
 	else
-		echo -e "${RED}${BOLD}Some required dependencies are missing.${NC}"
+		printf '%s\n' "${RED}${BOLD}Some required dependencies are missing.${NC}"
 		if ! $INSTALL_MODE; then
-			echo -e "Run ${CYAN}$0 --install${NC} to install them automatically."
+			printf '%s\n' "Run ${CYAN}$0 --install${NC} to install them automatically."
 		fi
 		rc=1
 	fi
 	if [ "${#AGENT_FAILURES[@]}" -gt 0 ]; then
-		echo ""
-		echo -e "${BOLD}Collected failures (fix them, then re-run):${NC}"
+		printf '\n'
+		printf '%s\n' "${BOLD}Collected failures (fix them, then re-run):${NC}"
 		for f in ${AGENT_FAILURES[@]+"${AGENT_FAILURES[@]}"}; do
-			echo -e "  ${RED}FAILED:${NC} $f"
+			printf '%s\n' "  ${RED}FAILED:${NC} $f"
 		done
 		rc=1
 	fi
