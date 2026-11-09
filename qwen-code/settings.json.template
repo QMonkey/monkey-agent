@@ -1,10 +1,17 @@
 {
   "$version": 4,
   "tools": {
-    "approvalMode": "default"
+    "approvalMode": "default",
+    "shell": {
+      "defaultTimeoutMs": 600000
+    }
+  },
+  "env": {
+    "QWEN_STREAM_MAX_LIFETIME_MS": "1800000"
   },
   "permissions": {
-    "allow": ["run_shell_command", "monitor", "write_file", "edit", "read_file", "artifact"],
+    "allow": ["run_shell_command", "monitor", "write_file", "edit", "read_file",
+      "artifact", "record_artifact", "tool_call", "web_fetch"],
     "ask": ["run_shell_command(tmux kill-server*)"]
   },
   "modelProviders": {
@@ -13,11 +20,16 @@
 {{- range $i, $r := (strings.Split "\n" .Env.QWEN_LLM_MODEL_ROWS) }}{{ $f := (strings.Split "|" $r) }}
 {{- if ne $i 0 }},{{ end }}
       {
+        {{- /* entries are sealed: top-level model.generationConfig never fills a provider row, so request/stream timeouts live per row */}}
         "id": {{ toJSON (index $f 0) }},
         "name": {{ toJSON (index $f 0) }},
         "baseUrl": {{ toJSON $.Env.QWEN_LLM_BASE_URL }},
         "envKey": {{ toJSON $.Env.QWEN_LLM_API_KEY_ENV_NAME }},
-        "contextWindowSize": {{ index $f 1 }}
+        "contextWindowSize": {{ index $f 1 }},
+        "generationConfig": {
+          "timeout": 300000,
+          "streamIdleTimeoutMs": 600000
+        }
       }
 {{- end }}
 {{- end }}
