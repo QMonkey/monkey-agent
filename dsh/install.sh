@@ -115,9 +115,9 @@ install_agent_dsh() {
 	) || rc=$?
 
 	# Link the rendered file into dsh's web-profile location (creates
-	#    ~/.dsh/profiles/web if needed; a foreign regular file already
-	#    there is backed up to <dst>.pre-agent.bak — this repo owns the
-	#    web profile's cordis.patch.yml).
+	#    ~/.dsh/profiles/web if needed; link_config's takeover mode moves a
+	#    foreign regular file there to <dst>.link-bak first — this repo owns
+	#    the web profile's cordis.patch.yml).
 	mkdir -p "$HOME/.dsh/profiles/web"
 	link_config "$rendered" "$HOME/.dsh/profiles/web/cordis.patch.yml" takeover || rc=$?
 
