@@ -8,12 +8,12 @@
   KeepAlive.SuccessfulExit=false to match systemd Restart=on-failure (a
   clean SIGTERM stays stopped), ThrottleInterval mirroring RestartSec.
   Credentials are NOT inlined: launchd has no EnvironmentFile, so the
-  command sources the 0600 secrets.env first — the same file the
+  command sources the 0600 agent.env first — the same file the
   systemd unit consumes and the Gateway auto-loads as its documented
   global fallback env source. Do not ALSO run `openclaw gateway install`:
   two supervisors would compete for the same Gateway state directory.
 
-  Registration (install.sh, best-effort):
+  Registration (lib/agent.sh register_service, best-effort):
     launchctl bootout gui/<uid>/com.openclaw.gateway   # ignore "not found"
     launchctl bootstrap gui/<uid> <plist>
 -->
@@ -25,7 +25,7 @@
   <array>
     <string>/bin/sh</string>
     <string>-c</string>
-    <string>. '{{ .Env.HOME }}/.config/agent/secrets.env' || exit 1; exec '{{ .Env.OPENCLAW_BIN }}' gateway run</string>
+    <string>. '{{ .Env.HOME }}/.config/env/agent.env' || exit 1; exec '{{ .Env.OPENCLAW_BIN }}' gateway run</string>
   </array>
   <key>WorkingDirectory</key>
   <string>{{ .Env.OPENCLAW_CHANNEL_CWD }}</string>
