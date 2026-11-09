@@ -5,10 +5,10 @@
 # source time.
 #
 # Install steps: ensure the binary (Node floor HIGHER than the other agents;
-# this file owns the bump path — the distro package when new enough, Homebrew
-# otherwise, WARN+skip rather than breaking the family's Node 22) → install
-# the official channel plugins (DingTalk is NOT a core channel) → render
-# config → register the gateway service.
+# the bump path is the framework's ensure_node_at_least — distro package when
+# new enough, Homebrew otherwise — WARN+skip rather than breaking the
+# family's Node 22) → install the official channel plugins (DingTalk is NOT a
+# core channel) → render config → register the gateway service.
 #
 # Pitfalls this file encodes:
 #   - The config is installed as a regular-file COPY at ~/.openclaw/openclaw.json,
@@ -17,7 +17,7 @@
 #   - No secret value is ever rendered: LLM key, DingTalk clientId/clientSecret
 #     and the gateway token use OpenClaw's `${VAR}` config substitution; the
 #     values arrive through the environment (the unit's EnvironmentFile=
-#     hands over secrets.env, which the Gateway also auto-loads).
+#     hands over agent.env, which the Gateway also auto-loads).
 #   - Strict JSON5 schema: an unknown key makes the Gateway REFUSE TO START
 #     (config errors exit 78 on run). A channel key is legal only while its
 #     plugin is installed; gateway.auth is injected ONLY when
@@ -219,7 +219,7 @@ install_agent_openclaw() {
 	# handled by register_service.
 	if have_native_cmd openclaw; then
 		register_service openclaw-gateway.service com.openclaw.gateway _openclaw_render_unit \
-			"Fill secrets.env and re-run, or: systemctl --user enable --now openclaw-gateway.service (launchctl bootstrap gui/$(id -u) on macOS)" || rc=$?
+			"Fill agent.env and re-run, or: systemctl --user enable --now openclaw-gateway.service (launchctl bootstrap gui/$(id -u) on macOS)" || rc=$?
 	fi
 
 	return "$rc"
