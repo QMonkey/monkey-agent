@@ -16,7 +16,7 @@
 #      but the hook itself still returns 0 for it)
 #
 # Connectivity skip switch: export SKIP_CONNECTIVITY=1 (advisory downgrade
-# for offline machines — design §4.6). Picked over a CLI flag because agent
+# for offline machines). Picked over a CLI flag because agent
 # hooks receive no arguments from the entry points.
 #
 # Failure policy: warn for recoverable problems, non-zero return only for
@@ -30,7 +30,7 @@ checkhealth_agent_opencode() {
 	binary_version_check opencode '[0-9]+\.[0-9]+\.[0-9]+[^ ]*' \
 		"npm i -g opencode-ai (or curl -fsSL https://opencode.ai/install | bash)" || rc=1
 
-	llm_health opencode OPENCODE_LLM_API_KEY OPENCODE_LLM_BASE_URL OPENCODE_LLM_MODEL "" " The rendered opencode.json will then have empty fields." \
+	llm_health opencode OPENCODE_LLM_API_KEY OPENCODE_LLM_BASE_URL OPENCODE_LLM_MODEL "" " The rendered opencode.json will then have empty fields." "" \
 		"$HOME/.config/agent/opencode/opencode.json" json:provider.llm.models
 
 	return "$rc"
