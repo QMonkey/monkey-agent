@@ -5,14 +5,18 @@
 # ok/info/warn/fail output helpers are available; single file by design.
 #
 # Local state layout — everything lives OUTSIDE this repo checkout:
-#   AGENT_HOME    ~/.config/agent          rendered configs + secrets.env
-#   SECRETS_FILE  $AGENT_HOME/secrets.env  0600, gitignored, the single
-#                 machine-local values file (keys, endpoints, model ids)
+#   AGENT_HOME    ~/.config/agent          rendered configs
+#   SECRETS_FILE  ~/.config/env/agent.env  0600, gitignored, the single
+#                 machine-local values file (keys, endpoints, model ids).
+#                 ~/.config/env/ is the family's env-file directory — one
+#                 file per project, sourced by the profiles and read
+#                 directly by the service units. It is NOT under AGENT_HOME,
+#                 which keeps holding rendered configs only.
 #
 # Conventions:
 #   - No secret value ever travels on a command line or into a log line:
 #     helpers hand values over through the environment and files only.
-#   - Existing secrets.env values win over the install-time environment:
+#   - Existing agent.env values win over the install-time environment:
 #     idempotent re-runs never clobber hand-edited values.
 #   - A missing secret never blocks the install: templates are written
 #     empty so they can be hand-filled after the fact.
@@ -23,7 +27,7 @@
 # fresh INSTALL_DIR checkout first, so BASH_SOURCE is trustworthy here.
 AGENT_REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 AGENT_HOME="${AGENT_HOME:-$HOME/.config/agent}"
-SECRETS_FILE="${SECRETS_FILE:-$AGENT_HOME/secrets.env}"
+SECRETS_FILE="${SECRETS_FILE:-$HOME/.config/env/agent.env}"
 
 # ──────────────────────── collected failures ────────────────────────
 # AGENT_FAILURES — global list of agent failures collected during a run.
@@ -52,7 +56,7 @@ _check_var_name() {
 	esac
 }
 
-# ──────────────────────── secrets.env ────────────────────────
+# ──────────────────────── agent.env ────────────────────────
 # load_secrets — source SECRETS_FILE when it exists. Sourcing means values
 # already in the file overwrite any same-named environment value: the file
 # wins, exactly the precedence the re-run guarantee needs.
@@ -85,9 +89,9 @@ _file_value() {
 # secret <VARNAME> [FALLBACK_VAR...] — print the first non-empty resolved
 # value among the named vars to stdout (all empty: empty stdout, always
 # exit 0 so callers under `set -e` are safe). Per var, a non-empty
-# secrets.env value wins over the inherited environment (file read via
+# agent.env value wins over the inherited environment (file read via
 # _file_value: subshell containment, half-written/broken files cannot
-# poison the caller). The variadic fallback is the §4.2 override layer:
+# poison the caller). The variadic fallback is the override layer:
 #   secret OPENCODE_LLM_API_KEY LLM_API_KEY
 # means the agent-specific value overrides the shared backend; a single
 # name is a plain lookup. Reads are logged as set/unset only — never the
@@ -108,19 +112,16 @@ secret() {
 }
 
 # write_secrets_template <varname>... — create or complete SECRETS_FILE
-# (0600) as a thin wrapper over "render fill": secrets.env.template seeds a
+# (0600) as a thin wrapper over "render fill": agent.env.template seeds a
 # fresh file (grouped comments included, so it carries its own
 # documentation), hand-edited values in an existing file always win, empty
 # KEY= lines are filled from the environment, missing keys are appended.
-# Values are written RAW — one containing whitespace or quotes must be
-# filled by hand (render warns; realistic credentials never trip this),
-# because the file is sourced by the shell.
 write_secrets_template() {
 	local var
 	for var in "$@"; do
 		_check_var_name "$var"
 	done
-	render_fill "$AGENT_REPO_ROOT/secrets.env.template" "$SECRETS_FILE" "$@"
+	render_fill "$AGENT_REPO_ROOT/agent.env.template" "$SECRETS_FILE" "$@"
 }
 
 # ──────────────────────── config rendering ────────────────────────
@@ -156,7 +157,7 @@ llm_presence() {
 # The API key is written to a 0600 temp file and handed to curl via
 # `-H @file`, never on a command line (no secret value in the process
 # list). On failure: record_agent_failure (warn + the collected list) and
-# a non-zero return — the hooks guard the call with `|| true`, so the health
+# a non-zero return — llm_health below returns 0 regardless, so the health
 # run itself still returns 0. No base URL from either source: silent skip
 # (nothing to probe). <label> prefixes the collected failure line
 # ("opencode", "dsh", ...).
@@ -211,13 +212,16 @@ wire_secrets_profile() {
 	# as shell-only variables invisible to every child process.
 	# head class: the partition (append_env_block) keeps this block ahead
 	# of every normal/tail block — the exec-terminator ordering is the
-	# framework's partition rule now, not this repo's content matching.
+	# framework's partition rule.
 	# tmux coverage comes FREE from the family's tmux config: Linux leaves
 	# default-command empty, so every new window is a LOGIN shell and reads
 	# .zprofile itself (a fresh window yields the secrets with the server env unset)
 	# — no snapshot mirroring into the running server, which would only add a divergence surface.
+	# The path comes from $SECRETS_FILE, never a hand-typed literal, so an
+	# override (or a future move) cannot leave the profile sourcing a path
+	# nothing writes; env_source_line decides ~-vs-absolute spelling.
 	append_env_block "agent secrets (remove these two lines to disable)" \
-		'[[ -f "$HOME/.config/agent/secrets.env" ]] && { set -a; source "$HOME/.config/agent/secrets.env"; set +a; }' "head"
+		"$(env_source_line "$SECRETS_FILE")" "head"
 }
 
 # models.dev catalog cache: fetched once per install process, shared by
@@ -242,15 +246,14 @@ modelsdev_curl() {
 modelsdev_fetch() {
 	# Positive cache only: a good catalog is fetched once per run and every
 	# later caller inherits it (the caller must be in this shell, not a $(…)
-	# substitution — see the per-hook prewarm below).
+	# substitution — install.sh's prepare step warms it there).
 	[ -n "$_MODELSDEV_JSON" ] && return 0
 	local prof=(-n 4 -d 15 -m 60 -t 60)
-	# A failure is never sticky. One bad sequence must not degrade the rest of
-	# the run: on this machine a real install resolved zero models for opencode
-	# and dsh and five for openclaw and qwen minutes later in the SAME process,
-	# i.e. the proxy blipped and recovered. After the first miss, later requests
-	# still try — just with one cheap attempt instead of the full backoff, so a
-	# genuinely dead catalog can't cost four agents × minutes.
+	# A failure is never sticky: the proxy can blip and recover minutes later
+	# in the SAME process, so one bad sequence must not degrade the rest of the
+	# run. After the first miss, later requests still try — just with one cheap
+	# attempt instead of the full backoff, so a genuinely dead catalog cannot
+	# stall every later agent.
 	[ "$_MODELSDEV_FAILURES" -gt 0 ] && prof=(-n 1 -t 60)
 	if _MODELSDEV_JSON=$(retry "${prof[@]}" -s "models.dev catalog" modelsdev_curl); then
 		_MODELSDEV_FAILURES=0
@@ -374,7 +377,7 @@ for arg in sys.argv[1:]:
 # let a duplicate inside LLM_MODELS survive. Normalization is csv_normalize's.
 resolve_llm_models() {
 	local catalog="${LLM_MODELS:-}" seeded
-	# secrets.env wins over the environment for LLM_MODELS too, exactly like
+	# agent.env wins over the environment for LLM_MODELS too, exactly like
 	# every other value through secret(): reading only the environment made
 	# the model list depend on whether the launching shell happened to export
 	# it, so the second install run (or a non-login shell) silently rendered
@@ -407,9 +410,7 @@ pick_reasoning_effort() {
 # substitution trims it, so a template's range never sees an empty final row;
 # templates guard on the empty string too). efforts is "-" when the model
 # declares none; pick is the tier to configure (empty = render no effort
-# option). This replaced the per-agent loops that hand-concatenated JSON/YAML
-# fragments — stray commas, a literal \n and last-one-wins duplicate keys came
-# from building structure as strings there.
+# option).
 llm_model_rows() {
 	local list caps id ctx out eff pick
 	list=$(resolve_llm_models "$1")
@@ -450,7 +451,7 @@ csv_normalize() {
 # config must carry as many models as the secrets catalog asks for
 # (count-spec: "json:<dotted.path>" or "yaml-ids"). A short count is the
 # signature of a catalog that was unreachable at install time. WARN only:
-# editing secrets.env without re-running the installer mismatches legitimately
+# editing agent.env without re-running the installer mismatches legitimately
 # until the next run, and failing the health run for that would be noise.
 llm_catalog_check() {
 	local file="$1" spec="$2" key="$3" prim list want have
@@ -487,9 +488,9 @@ print(len(d) if isinstance(d, (list, dict)) else "")
 	'' | *[!0-9]*) return 0 ;;
 	esac
 	if [ "$have" -eq 0 ]; then
-		warn "$file rendered NO model entries while secrets.env lists $want — models.dev was likely unreachable during install; re-run it."
+		warn "$file rendered NO model entries while agent.env lists $want — models.dev was likely unreachable during install; re-run it."
 	elif [ "$have" -ne "$want" ]; then
-		warn "$file rendered $have model entries but secrets.env lists $want — re-run the installer to sync."
+		warn "$file rendered $have model entries but agent.env lists $want — re-run the installer to sync."
 	fi
 	return 0
 }
@@ -521,9 +522,9 @@ secrets_egress_guard() {
 	*,127.0.0.1,*) return 0 ;;
 	esac
 	if [ -n "$np" ]; then
-		record_agent_failure "secrets.env NO_PROXY has no loopback bind (${np}) — the daemons would proxy their own 127.0.0.1 ports; add localhost,127.0.0.1,::1"
+		record_agent_failure "agent.env NO_PROXY has no loopback bind (${np}) — the daemons would proxy their own 127.0.0.1 ports; add localhost,127.0.0.1,::1"
 	else
-		record_agent_failure "secrets.env NO_PROXY is empty — the daemons would proxy their own 127.0.0.1 ports; set localhost,127.0.0.1,::1 (plus any internal hosts)"
+		record_agent_failure "agent.env NO_PROXY is empty — the daemons would proxy their own 127.0.0.1 ports; set localhost,127.0.0.1,::1 (plus any internal hosts)"
 	fi
 	return 0
 }
@@ -729,8 +730,7 @@ service_health() {
 #     the user manager alive for a service enabled later by hand. Enable+start
 #     is the only step gated on SECRETS_FILE being non-empty — a daemon without
 #     its credential env file crash-loops under Restart=on-failure.
-#   * macOS bootstraps only with credentials; bootout first so re-runs replace
-#     a previously loaded agent instead of failing.
+#   * macOS bootstraps only with credentials.
 # Returns non-zero when the manager itself refuses.
 register_service() {
 	local unit="$1" label="$2" render_fn="$3" hint="$4" dest rc=0
@@ -746,7 +746,7 @@ register_service() {
 			return 1
 		fi
 		if [ ! -s "$SECRETS_FILE" ]; then
-			warn "$label rendered but NOT bootstrapped — secrets.env is missing or empty (the daemon would boot without its credential env file). $hint"
+			warn "$label rendered but NOT bootstrapped — agent.env is missing or empty (the daemon would boot without its credential env file). $hint"
 			return 0
 		fi
 		# A bootstrap of an already-bootstrapped label fails; bootout
@@ -782,7 +782,7 @@ register_service() {
 			rc=1
 		fi
 	else
-		warn "$unit rendered but NOT enabled — secrets.env is missing or empty (the daemon would boot without its credential env file). $hint"
+		warn "$unit rendered but NOT enabled — agent.env is missing or empty (the daemon would boot without its credential env file). $hint"
 	fi
 	# Best-effort: some setups gate linger behind polkit auth, which would sit
 	# on an interactive prompt in the middle of an unattended install.
@@ -801,7 +801,7 @@ register_service() {
 # over ENABLED_AGENTS, source the folder's file and call the function.
 # Adding an agent means adding a folder plus its name in ALL_AGENTS; the
 # --with-* flags, the default enable set and the usage text all derive from
-# this one list, so the skeleton has no per-agent literals left to update.
+# this one list.
 ALL_AGENTS=(opencode dsh qwen-code openclaw)
 
 # parse_agent_flags "$@" — split an argument list: a --with-<agent> flag
@@ -870,7 +870,6 @@ agent_usage() {
 #                                             the collected list at the end.
 run_agent_hook() {
 	local kind="$1" folder="$2" file fn
-	# Function names prefix the kind: install_agent_* / checkhealth_agent_*.
 	file="$AGENT_REPO_ROOT/$folder/$kind.sh"
 	fn="${kind}_agent_${folder//-/_}"
 	if [ ! -f "$file" ]; then
