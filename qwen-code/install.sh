@@ -6,7 +6,7 @@
 # @qwen-code/qwen-code, bin `qwen`, Node.js 22+).
 #
 # Pitfalls this file encodes:
-#   - One credential store: the 0600 secrets.env — .zprofile sources it for
+#   - One credential store: the 0600 agent.env — .zprofile sources it for
 #     shells, the unit's EnvironmentFile= for the daemon. settings.json
 #     references variables BY NAME (modelProviders envKey, channels $VAR);
 #     token security means indirection, never values in the file.
@@ -26,14 +26,15 @@ _qwen_install_binary() {
 # _qwen_render_unit <dest> — render this platform's unit for
 # register_service. The subshell bounds these exports (as at every render
 # site): a leaked value would let a later render fill a missing reference
-# silently. QWEN_SERVICE_PATH is plist-only — launchd does not read shell
-# profiles, so the PATH is frozen at install; re-run install after PATH
-# changes (systemd gets its PATH from the unit file instead).
+# silently. The unit carries an explicit Environment=PATH because systemd
+# reads neither the shell's profile nor its PATH; launchd reads no profiles
+# either, hence the plist's PATH array. Both are frozen at install — re-run
+# install after a PATH change.
 _qwen_render_unit() {
-	local exports=(QWEN_BIN="$(command -v qwen)" QWEN_SERVE_AUTH_FLAG="$serve_auth_flag" QWEN_CHANNEL_ARGS="$channel_args")
+	local exports=(QWEN_BIN="$(command -v qwen)" QWEN_SERVE_AUTH_FLAG="$serve_auth_flag" QWEN_CHANNEL_ARGS="$channel_args" QWEN_SERVICE_PATH="$PATH")
 	if [ "$(uname -s)" = "Darwin" ]; then
 		(
-			export "${exports[@]}" QWEN_SERVICE_PATH="$PATH"
+			export "${exports[@]}"
 			render \
 				"$AGENT_REPO_ROOT/qwen-code/service/com.qwenlm.qwen-serve.plist.template" "$1"
 		)
@@ -60,10 +61,10 @@ install_agent_qwen_code() {
 
 	# QWEN_SERVER_TOKEN is the optional bearer token for the resident serve
 	# daemon. Auth posture (warn, never block): a set token boots serve with
-	# --require-auth and reaches it through secrets.env (0600); without it the
+	# --require-auth and reaches it through agent.env (0600); without it the
 	# token-less loopback bind exposes the full operator API — code execution
 	# as the daemon user — to every local process. The installer
-	# auto-generates one into secrets.env (fill-empty-only, so a hand-set value
+	# auto-generates one into agent.env (fill-empty-only, so a hand-set value
 	# always wins); emptying the variable by hand reverts to token-less.
 	local serve_auth_flag=""
 	if [ -n "$(secret QWEN_SERVER_TOKEN 2>/dev/null)" ]; then
@@ -87,7 +88,7 @@ install_agent_qwen_code() {
 	# channel at startup and EXITS on the first empty credential, killing the
 	# rest with it. No credentials -> "channels": {} -> the daemon boots clean.
 	# The flags carry NO secret values — the template embeds the credential
-	# NAME ($QWEN_QQ_APP_ID) and the agent resolves it from secrets.env at boot.
+	# NAME ($QWEN_QQ_APP_ID) and the agent resolves it from agent.env at boot.
 	local channel_args=""
 	if secret_pair_set QWEN_QQ_APP_ID QWEN_QQ_APP_SECRET ||
 		secret_pair_set QWEN_DINGTALK_ACCESS_TOKEN QWEN_DINGTALK_SECRET; then
@@ -152,7 +153,7 @@ install_agent_qwen_code() {
 			info "QQ Bot credentials not set — the qq channel adapter inside the serve daemon will not connect (falls back to QR-code login on first start); fill QWEN_QQ_* in ${SECRETS_FILE#"$HOME"/} and restart the service."
 		fi
 		register_service qwen-serve.service com.qwenlm.qwen-serve _qwen_render_unit \
-			"Fill secrets.env and re-run, or: systemctl --user enable --now qwen-serve.service (launchctl bootstrap gui/$(id -u) on macOS)" || rc=$?
+			"Fill agent.env and re-run, or: systemctl --user enable --now qwen-serve.service (launchctl bootstrap gui/$(id -u) on macOS)" || rc=$?
 	fi
 
 	return "$rc"
