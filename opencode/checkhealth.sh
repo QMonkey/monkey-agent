@@ -31,7 +31,7 @@ checkhealth_agent_opencode() {
 		"npm i -g opencode-ai (or curl -fsSL https://opencode.ai/install | bash)" || rc=1
 
 	llm_health opencode OPENCODE_LLM_API_KEY OPENCODE_LLM_BASE_URL OPENCODE_LLM_MODEL "" " The rendered opencode.json will then have empty fields." "" \
-		"$HOME/.config/agent/opencode/opencode.json" json:provider.llm.models
+		"$AGENT_HOME/opencode/opencode.json" json:provider.llm.models
 
 	return "$rc"
 }
