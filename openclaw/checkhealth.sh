@@ -42,7 +42,7 @@ checkhealth_agent_openclaw() {
 		"npm install -g openclaw@latest (or: curl -fsSL https://openclaw.ai/install.sh | bash)" || rc=1
 
 	llm_health openclaw OPENCLAW_LLM_API_KEY OPENCLAW_LLM_BASE_URL OPENCLAW_LLM_MODEL "" "" "" \
-		"$HOME/.config/agent/openclaw/openclaw.json" json:models.providers.custom.models
+		"$AGENT_HOME/openclaw/openclaw.json" json:models.providers.custom.models
 
 	if secret_pair_set OPENCLAW_DINGTALK_ACCESS_TOKEN OPENCLAW_DINGTALK_SECRET; then
 		ok "DingTalk credentials are set (OPENCLAW_DINGTALK_ACCESS_TOKEN / OPENCLAW_DINGTALK_SECRET)."
