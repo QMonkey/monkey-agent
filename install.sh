@@ -153,15 +153,11 @@ install_shared_secrets() {
 	# missing. This merge is the ONLY source of that floor — the template
 	# leaves the line empty so fill mode takes this value instead of a seeded
 	# default — so it must stay ahead of write_secrets_template below.
-	# checkhealth guards the floor in the file (warn, never rewrite).
-	local _np="${NO_PROXY:-}" _d
-	for _d in localhost 127.0.0.1 ::1; do
-		case ",$_np," in
-		*,"$_d,"*) ;;
-		*) _np="${_np:+$_np,}$_d" ;;
-		esac
-	done
-	export NO_PROXY="$_np"
+	# checkhealth guards the floor in the file (warn, never rewrite). The merge
+	# itself lives in the shared engine (lib/env.sh no_proxy_floor) because the
+	# other networked project env files seed the same trio and need the same
+	# floor.
+	export NO_PROXY="$(no_proxy_floor)"
 	write_secrets_template \
 		LLM_API_KEY LLM_BASE_URL LLM_MODEL LLM_MODELS \
 		OPENCODE_LLM_API_KEY OPENCODE_LLM_BASE_URL OPENCODE_LLM_MODEL \
@@ -173,7 +169,7 @@ install_shared_secrets() {
 		OPENCLAW_DINGTALK_ACCESS_TOKEN OPENCLAW_DINGTALK_SECRET \
 		OPENCLAW_QQ_APP_ID OPENCLAW_QQ_CLIENT_SECRET OPENCLAW_QQ_ALLOW_FROM \
 		OPENCLAW_GATEWAY_TOKEN \
-		HTTPS_PROXY HTTP_PROXY NO_PROXY
+		$PROXY_ENV_KEYS
 	wire_secrets_profile
 }
 
