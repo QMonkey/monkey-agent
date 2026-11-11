@@ -156,11 +156,13 @@ llm_presence() {
 # its public default); pass nothing for agents without one.
 # The API key is written to a 0600 temp file and handed to curl via
 # `-H @file`, never on a command line (no secret value in the process
-# list). On failure: record_agent_failure (warn + the collected list) and
-# a non-zero return — llm_health below returns 0 regardless, so the health
-# run itself still returns 0. No base URL from either source: silent skip
-# (nothing to probe). <label> prefixes the collected failure line
-# ("opencode", "dsh", ...).
+# list). The base URL is never echoed either: it is a gateway address and
+# these lines land in the tee'd install log, so the report names the key
+# instead of its value. On failure: record_agent_failure (warn + the
+# collected list) and a non-zero return — llm_health below returns 0
+# regardless, so the health run itself still returns 0. No base URL from
+# either source: silent skip (nothing to probe). <label> prefixes the
+# collected failure line ("opencode", "dsh", ...).
 connectivity_check() {
 	local label="$1" base="" code hdr
 	if [ "${SKIP_CONNECTIVITY:-0}" = 1 ]; then
@@ -190,9 +192,9 @@ connectivity_check() {
 	code=$(curl "${curl_args[@]}" "$base/models") || code=""
 	rm -f "$hdr"
 	if [ "$code" = "200" ]; then
-		ok "LLM endpoint reachable ($base/models)."
+		ok "LLM endpoint reachable for $label (LLM_BASE_URL)."
 	else
-		record_agent_failure "$label: LLM endpoint $base/models not reachable (HTTP ${code:-none})"
+		record_agent_failure "$label: the LLM_BASE_URL endpoint is not reachable (HTTP ${code:-none}) — the URL is not printed here; check the key in ${SECRETS_FILE#"$HOME"/}"
 		return 1
 	fi
 	return 0
@@ -513,7 +515,9 @@ llm_health() {
 # through the proxy, and the symptom (403, timeout, a channel that never
 # connects) sits far from the cause. Reports through AGENT_FAILURES so the run
 # still finishes and nothing is fatal mid-run. Reads the FILE value, never the
-# environment: the installer merges the environment, the units start from the file.
+# environment: the installer merges the environment, the units start from the
+# file. The value itself is never echoed — NO_PROXY is where an internal host
+# list lives, so the report counts entries instead.
 secrets_egress_guard() {
 	local np
 	[ -f "$SECRETS_FILE" ] || return 0
@@ -522,7 +526,7 @@ secrets_egress_guard() {
 	*,127.0.0.1,*) return 0 ;;
 	esac
 	if [ -n "$np" ]; then
-		record_agent_failure "agent.env NO_PROXY has no loopback bind (${np}) — the daemons would proxy their own 127.0.0.1 ports; add localhost,127.0.0.1,::1"
+		record_agent_failure "agent.env NO_PROXY lists $(printf '%s' "$np" | tr ',' '\n' | grep -c .) entries with no loopback bind (the names are not printed here) — the daemons would proxy their own 127.0.0.1 ports; add localhost,127.0.0.1,::1"
 	else
 		record_agent_failure "agent.env NO_PROXY is empty — the daemons would proxy their own 127.0.0.1 ports; set localhost,127.0.0.1,::1 (plus any internal hosts)"
 	fi
@@ -760,12 +764,22 @@ register_service() {
 		fi
 		return "$rc"
 	fi
+
 	if ! systemd_user_available; then
 		warn "No systemd user session (WSL/container?) — skipping resident service registration; the units render on a host with systemd."
 		return 0
 	fi
 	dest="$HOME/.config/systemd/user/$unit"
 	mkdir -p "$HOME/.config/systemd/user"
+	# systemd re-reads a unit's text only when the unit is (re)started, so an
+	# `enable --now` on an already-running unit leaves the daemon executing the
+	# OLD ExecStart while the file on disk is new — launchd does not have this
+	# gap because bootout + bootstrap below always reloads. Capture the
+	# previous text and the running state to tell a real change from a no-op
+	# re-run.
+	local prev="" was_active=0
+	[ -f "$dest" ] && prev=$(<"$dest")
+	systemctl --user is-active --quiet "$unit" && was_active=1
 	if ! "$render_fn" "$dest"; then
 		warn "$unit render failed — skipping daemon-reload + enable --now (a stale/broken unit would register). $hint"
 		return 1
@@ -776,7 +790,16 @@ register_service() {
 	fi
 	if [ -s "$SECRETS_FILE" ]; then
 		if systemctl --user enable --now "$unit" 2>/dev/null; then
-			ok "$unit enabled and started (systemd user service)."
+			if [ "$was_active" -eq 1 ] && [ "$prev" != "$(<"$dest")" ]; then
+				if systemctl --user restart "$unit" 2>/dev/null; then
+					ok "$unit enabled, then restarted — its ExecStart changed and systemd would otherwise keep running the old one."
+				else
+					warn "$unit started but the restart after a unit change failed — restart manually: systemctl --user restart $unit"
+					rc=1
+				fi
+			else
+				ok "$unit enabled and started (systemd user service)."
+			fi
 		else
 			warn "$unit registration failed — enable manually: systemctl --user enable --now $unit"
 			rc=1
