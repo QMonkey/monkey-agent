@@ -175,6 +175,14 @@ install_shared_secrets() {
 
 install_step_prepare() {
 	ensure_git
+	# This step registers and reports systemd USER services, and both questions
+	# are answered by `systemctl --user` — which fails on a stale inherited
+	# $XDG_RUNTIME_DIR (a session that booted as root carries /run/user/0) even
+	# once /run/user/$UID itself is ready. Asking for that here is not a
+	# duplicate: every installer in the chain runs in its own process, so an
+	# export made by another component cannot reach this one, and a run of this
+	# repository alone has no neighbour to lean on.
+	ensure_xdg_runtime_dir
 	# Provision the renderer before install_step_tool, where its consumers
 	# run: every agent hook renders its config and its service unit with
 	# gomplate, while the framework's dependency pass runs AFTER that step —
