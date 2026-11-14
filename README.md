@@ -172,13 +172,14 @@ Notes:
 - `agent.env.template` documents the full variable set, grouped per
   agent — it is also the seed template the installer renders the real
   file from.
-- The installer appends one marker-guarded block (`# [head] agent secrets
+- The installer appends one marker-guarded block (`# [normal] agent secrets
 (remove these two lines to disable)`) to your login profile — `~/.zprofile`
   for zsh, `~/.bash_profile`/`~/.profile` plus `~/.bashrc` for bash — sourcing
   agent.env with `set -a` so the values land in the environment of every login
-  shell. `head` is the framework's partition class: the secrets block stays
-  ahead of the exec-style autostart blocks (`tail`) no matter which installer
-  ran last. Remove the block and its marker line to disable.
+  shell. `normal` is the framework's default partition class, shared with the
+  other projects' env blocks; the partition still sorts the block ahead of the
+  exec-style autostart blocks (`tail`) no matter which installer ran last.
+  Remove the block and its marker line to disable.
 
 ## What gets installed
 
