@@ -212,9 +212,6 @@ wire_secrets_profile() {
 	# (exported) — opencode's {env:VAR}, dsh web's apiKeyEnv and interactive
 	# qwen all read the process environment; a bare source would leave them
 	# as shell-only variables invisible to every child process.
-	# head class: the partition (append_env_block) keeps this block ahead
-	# of every normal/tail block — the exec-terminator ordering is the
-	# framework's partition rule.
 	# tmux coverage comes FREE from the family's tmux config: Linux leaves
 	# default-command empty, so every new window is a LOGIN shell and reads
 	# .zprofile itself (a fresh window yields the secrets with the server env unset)
@@ -222,8 +219,11 @@ wire_secrets_profile() {
 	# The path comes from $SECRETS_FILE, never a hand-typed literal, so an
 	# override (or a future move) cannot leave the profile sourcing a path
 	# nothing writes; env_source_line decides ~-vs-absolute spelling.
+	# Normal class (the default), like every other project's env block: the
+	# partition still sorts it ahead of the [tail] exec blocks, and nothing in
+	# the [head] PATH block reads a secret, so no consumer depends on the slot.
 	append_env_block "agent secrets (remove these two lines to disable)" \
-		"$(env_source_line "$SECRETS_FILE")" "head"
+		"$(env_source_line "$SECRETS_FILE")"
 }
 
 # models.dev catalog cache: fetched once per install process, shared by
