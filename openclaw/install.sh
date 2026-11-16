@@ -90,7 +90,11 @@ _openclaw_install_channel_plugin() {
 # silently. The unit carries an explicit Environment=PATH because systemd
 # reads neither the shell's profile nor its PATH; launchd reads no profiles
 # either, hence the plist's PATH array. Both are frozen at install — re-run
-# install after a PATH change.
+# install after a PATH change. The systemd template quotes the assignment
+# (Environment="PATH=…"): systemd ends an unquoted value at the first space,
+# so any PATH entry containing a space — Windows-style install dirs are the
+# usual source — is split off as an "Invalid environment assignment,
+# ignoring" fragment and PATH is truncated right there.
 _openclaw_render_unit() {
 	(
 		export OPENCLAW_BIN="$(command -v openclaw)" OPENCLAW_SERVICE_PATH="$PATH" OPENCLAW_CHANNEL_CWD="$HOME"
