@@ -29,7 +29,11 @@ _qwen_install_binary() {
 # silently. The unit carries an explicit Environment=PATH because systemd
 # reads neither the shell's profile nor its PATH; launchd reads no profiles
 # either, hence the plist's PATH array. Both are frozen at install — re-run
-# install after a PATH change.
+# install after a PATH change. The systemd template quotes the assignment
+# (Environment="PATH=…"): systemd ends an unquoted value at the first space,
+# so any PATH entry containing a space — Windows-style install dirs are the
+# usual source — is split off as an "Invalid environment assignment,
+# ignoring" fragment and PATH is truncated right there.
 _qwen_render_unit() {
 	local exports=(QWEN_BIN="$(command -v qwen)" QWEN_SERVE_AUTH_FLAG="$serve_auth_flag" QWEN_CHANNEL_ARGS="$channel_args" QWEN_SERVICE_PATH="$PATH")
 	if [ "$(uname -s)" = "Darwin" ]; then
