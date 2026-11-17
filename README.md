@@ -1,14 +1,15 @@
 # monkey-agent
 
 One command sets up the AI agent workstation on a new machine: four
-deeply supported agents, their configs rendered from in-repo templates,
+deeply supported agents, their configs rendered (or, where a config holds no
+value at all, linked) from in-repo files,
 and all machine-local values (keys, endpoints, model ids) collected in a
 single 0600 file outside the checkout.
 
 | Agent         | Form                                    | Role                                                                                                                        |
 | ------------- | --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
 | **OpenCode**  | terminal coding agent                   | daily driver                                                                                                                |
-| **DSH**       | web-UI coding agent                     | interactive coding (web profile only)                                                                                       |
+| **DSH**       | web-UI + TUI coding agent               | interactive coding (web + dsh-tui profiles)                                                                                 |
 | **Qwen Code** | terminal coding agent + resident daemon | executes coding tasks dispatched remotely; dingtalk + QQ Bot channels hosted by its serve daemon                            |
 | **OpenClaw**  | resident personal-assistant gateway     | non-coding remote dispatch: gateway daemon (dingtalk + QQ Bot plugins), scheduled wake-ups, hands coding tasks to Qwen Code |
 
@@ -53,7 +54,7 @@ hand when a real need shows up.
   floor for the dependency pass and re-runs. Either way the distro package
   is taken where one ships it (arch's AUR) and Homebrew elsewhere,
   bootstrapping Homebrew on a host that has none.
-- Node.js: DSH and Qwen Code need **22+**; OpenClaw needs **26.12+**.
+- Node.js: DSH needs **22.19+**, Qwen Code **22+**; OpenClaw needs **26.12+**.
   OpenCode asserts no floor — `opencode-ai` ships its own runtime, and the
   npm lane only self-heals node/npm existence.
   Provisioning goes through the framework's `ensure_node_at_least`:
@@ -199,36 +200,61 @@ Notes:
   render time (the `OPENCODE_LLM_API_KEY` override when set, else the
   shared `LLM_API_KEY`).
 
-### DSH (web profile only)
+### DSH (web + dsh-tui profiles)
 
-- Node.js 22+ / npm auto-installed when missing, then `npm install -g
-@deepseek-ai/dsh`; pnpm is auto-installed for plugin management.
-- Four web-profile plugins (`dsh plugin --profile web add`), listed in
-  `dsh/plugins.txt`: `@zhengjunyao/dsh-updater` (release tracking,
-  one-click update with automatic rollback), `dsh-permission-rules`
-  (declarative permission rules), `dsh-at-file` (Codex-style `@file`
-  mentions), `dsh-notify-me` (desktop notifications on completion /
-  needs-input / approval). Already-installed plugins are skipped; plugin
-  bundles activate on the next `dsh web` start.
-- Config rendered to `~/.config/agent/dsh/cordis.patch.yml` and
-  symlinked to `~/.dsh/profiles/web/cordis.patch.yml` (dsh re-reads the
-  patch per request — no restart needed for config edits).
-- The API key renders as a variable NAME (`apiKeyEnv` indirection);
-  base URL and model render as empty fields until agent.env provides
-  them (no public defaults).
-- `checkhealth.sh` runs a web-profile smoke test: it starts `dsh web
---no-open`, sleeps a fixed 30s (no early exit), then greps the captured log
-  for the `:3080` startup banner and shuts the process down (SIGTERM, 5s
-  grace, SIGKILL, `wait` reaps). Before that it pre-checks the port with
-  `lsof` — a listener already on `:3080` means the profile is up and the
-  smoke would fail its own bind into a false "no banner" report, so it
-  reports that instead. `lsof` is declared as an **optional** tool (its
-  absence never fails the dependency side of the run); the probe asks the
-  chain for it via `install_pkg`, which only succeeds in `--install`
-  mode — a plain run without `lsof` skips the pre-check and starts the
-  server anyway. A smoke that finds no banner returns non-zero from the
-  dsh hook, so it lands in `Collected failures` and makes `checkhealth.sh`
-  exit 1.
+- Node.js 22.19+ (the TUI's `engines` floor; dsh itself asks only for 22 and
+  the shared family floor stays 22 — only this agent asserts the higher one)
+  and npm are provisioned when missing, then `npm install -g
+@deepseek-ai/dsh` and `npm install -g @deepseek-harness-tui/dsh-tui` (bins
+  `dsh-tui` / `dst`); pnpm is auto-installed for plugin management.
+- Two profiles, one manifest each, through the same
+  `dsh plugin --profile <name> add` lane: `dsh/plugins.txt` → `web` (updater,
+  permission-rules, at-file, notify-me) and `dsh/plugins-tui.txt` → `dsh-tui`
+  (the surface bundle plus the other three, no updater — the TUI owns an
+  `/update` lane of its own and the updater would make a third driver of the
+  shared dsh engine). Adding the surface bundle is what creates the `dsh-tui`
+  profile: dsh ships no tui template. Installed ids are skipped; plugin
+  bundles activate on the next start of that profile.
+- One rendered `~/.config/agent/dsh/cordis.patch.yml` is symlinked into both
+  `~/.dsh/profiles/web/` and `~/.dsh/profiles/dsh-tui/`, and dsh re-reads it
+  per request — config edits need no restart. A patch row overrides by `id`
+  and replaces that row's whole `config` block, so the template restates
+  every key that must stay active.
+- Default authorization: `dsh/rules.yaml` pre-approves the shell, background
+  job control, file and web tools, and keeps `tmux kill-server` on `ask`. It
+  holds no machine-local value, so it is linked into
+  `~/.config/agent/dsh/rules.yaml` instead of rendered — moving or deleting
+  the checkout therefore leaves a dangling link, which the health probe names
+  as such instead of telling you to re-run the installer. The baseline stays
+  upstream's `DSH_PERMISSION_MODE`, read from the environment by the dsh
+  process and defaulting to `workspace-write` (sandboxed + `ask`). User rules
+  are evaluated first, so the broad shell `allow` shadows the plugin's
+  builtin high-risk baseline; drop that row if the floor should hold.
+  `/rules list` and `/rules test <tool> <json-args>` show the plugin's own
+  view.
+- The API key renders as a variable NAME (`apiKeyEnv` indirection); base URL
+  and model render as empty fields until agent.env provides them (no public
+  defaults). The TUI keeps its own preferences in `~/.dsh-tui/settings.json`,
+  importing only that row from the patch and only once — the provider rows
+  stay patch-driven.
+- `checkhealth.sh` smoke-tests the web profile: it starts `dsh web
+--no-open`, sleeps a fixed 30s (no early exit), greps the captured log for
+  the `:3080` startup banner, then shuts the process down (SIGTERM, 5s grace,
+  SIGKILL, `wait` reaps). Before that it pre-checks the port with `lsof` — a
+  listener already on `:3080` means the profile is up and the smoke would
+  fail its own bind into a false "no banner" report, so it says that instead.
+  `lsof` is declared an **optional** tool (its absence never fails the
+  dependency side of the run); the probe asks the chain for it via
+  `install_pkg`, which only succeeds in `--install` mode, so a plain run
+  without it starts the server anyway. No banner returns non-zero from the
+  dsh hook, landing in `Collected failures` and making `checkhealth.sh` exit
+  1. Both profiles are additionally checked for composition without booting
+     them: `dsh --profile <name> --dump-config` must succeed, and a profile that
+     does not compose is a collected failure. Nothing asserts that the composed
+     `permission-rules` row still names our rules file — matching it meant
+     anchoring on indentation in dsh's output, which breaks on formatting drift.
+     `dsh-tui doctor` reports launcher/profile alignment too but exits 0 even
+     when an item fails, so nothing gates on it.
 
 ### Qwen Code
 
@@ -324,7 +350,8 @@ Each agent folder in this repo is self-contained: config templates
 (gomplate `{{ .Env.NAME }}` references), plugin lists, service units. The
 installer renders the templates with gomplate (references only, no
 format awareness) and writes the result atomically with 0600
-permissions into `~/.config/agent/` — base
+permissions into `~/.config/agent/`; a file with no value in it at all is
+linked there instead (dsh/rules.yaml) — base
 URLs, model ids and per-model limits exist only there, never in the
 checkout, and secret values never appear in a rendered file at all.
 `~/.config/opencode/opencode.json`
@@ -369,9 +396,11 @@ Four kinds of checks (three-state `[ OK ] / [WARN] / [FAIL]` output):
 1. **Tool health** — the required tools (gomplate at a `ver:5.3` floor,
    python3) and the shared `node` floor (`ver:22`), then per agent: its
    binary + parsable version, its own Node floor where it has one
-   (dsh/qwen 22+, openclaw 26.12+), and DSH's web-profile smoke. The four
-   agent binaries are additionally listed under an **Agents** section as
-   optional tools — a missing one prints `[FAIL]` there but is not a
+   (dsh 22.19+, qwen 22+, openclaw 26.12+), DSH's web-profile smoke and its
+   two profile-composition probes. The agent binaries (the dsh-tui launcher
+   included)
+   are additionally listed under an **Agents** section as optional
+   tools — a missing one prints `[FAIL]` there but is not a
    dependency failure; the hook above is what reports it.
 2. **Secrets health** — every enabled agent's resolved LLM triple
    (key, base URL + model) through its override layer, the channel
@@ -392,11 +421,11 @@ Four kinds of checks (three-state `[ OK ] / [WARN] / [FAIL]` output):
    probes, credential-gated) — all WARN-level and never counted.
 
 Exit code: **1** when a required tool or the shared node floor is missing,
-or when anything landed in the collected-failure list — a broken or
-failing agent hook (missing binary, Node below its floor, failed DSH
-smoke), a failed connectivity probe, a `NO_PROXY` without a loopback bind,
-or an agent whose rendered `channels` map disagrees with the unit's
-`--channel all`. **0** otherwise, WARNs included. The service/channel
+or when anything landed in the collected-failure list — a broken or failing
+agent hook (missing binary, Node below its floor, failed DSH smoke or
+failed profile-composition probe), a failed connectivity probe, a `NO_PROXY` without a
+loopback bind, or an agent whose rendered `channels` map disagrees with the
+unit's `--channel all`. **0** otherwise, WARNs included. The service/channel
 probes in section 4 are the strictly advisory ones.
 
 Agent folders register their own sections; `--install` installs missing
@@ -431,8 +460,9 @@ summary closes the run.
   `export SKIP_CONNECTIVITY=1`.
 - **Binary installed but "not on this shell's PATH"**: the installer
   cannot modify the running shell — open a new shell (or `exec zsh`).
-- **dsh plugins not active**: plugin bundles load on the next `dsh web`
-  start — restart the web profile if it is running.
+- **dsh plugins not active**: plugin bundles load on the next start of the
+  profile they were added to — restart it (`dsh web`, or `dsh-tui` /
+  `dsh dsh-tui` for the TUI profile).
 - **Hand-edited rendered config got overwritten**: by design — the
   template is the structural truth. Change the template, or put the
   value in agent.env.
