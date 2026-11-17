@@ -1,0 +1,51 @@
+# dsh permission rules — linked as-is into $AGENT_HOME/dsh/rules.yaml (there
+# is no machine-local value to render) and named by cordis.patch.yml's
+# permission-rules rulesFile, so one file governs every profile that installs
+# dsh-permission-rules. A symlink has no mode: what this file holds, anyone
+# who can read the checkout can read — tool names, globs and reasons, never a
+# secret.
+#
+# dsh has no per-tool allow list of its own; the baseline is one environment
+# value, DSH_PERMISSION_MODE (sandbox boundary, and whether the approval seam
+# asks at all — upstream default workspace-write = sandboxed + ask). These
+# rules say which calls need no human: first match wins, anything unmatched
+# falls through to that seam. `reason` is rendered to the operator on an ask
+# and to the model on a deny, so it has to argue for itself.
+#
+# The vocabulary is the plugin's, not ours — see its shipped
+# docs/rules-format.md and rules-format.schema.json. Its config block takes a
+# PATH only; rules written into the patch are echoed by --dump-config and
+# never read.
+#
+# Order is load-bearing: asks must precede allows, and the plugin appends its
+# builtin high-risk baseline AFTER this file, so a broad shell `allow` shadows
+# those builtin denies. `/rules list` marks them unreachable, `/rules test
+# <tool> <json-args>` shows what a call hits.
+rules:
+  # Tearing down the shared tmux server takes every other session with it —
+  # argv scope matches the command word, so `tmux -L foo kill-server` too.
+  - match:
+      tools: [bash, pwsh]
+      argv: { command: tmux, args: ["kill-server"] }
+    action: ask
+    reason: "tmux kill-server tears down every session pane — confirm the target server first"
+    tags: [destructive, tmux]
+
+  # Shell execution and background-job control run without prompting.
+  - match: { tools: [bash, pwsh, job_list, job_output, job_kill] }
+    action: allow
+    reason: "shell and background-job control are pre-approved on this workstation"
+    tags: [shell]
+
+  # File reads, writes and edits inside the sandboxed workspace, plus the
+  # search tools the same work needs.
+  - match: { tools: [read, read_image, write, edit, glob, grep] }
+    action: allow
+    reason: "workspace file reads and edits are pre-approved on this workstation"
+    tags: [files]
+
+  # Outbound web tools.
+  - match: { tools: [web_fetch, web_search] }
+    action: allow
+    reason: "web access is pre-approved on this workstation"
+    tags: [web]
