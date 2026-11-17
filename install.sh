@@ -256,7 +256,7 @@ for _summary_agent in ${ENABLED_AGENTS[@]+"${ENABLED_AGENTS[@]}"}; do
 		SUMMARY_LINES+=("  OpenCode: ${CYAN}~/.config/opencode/opencode.json${NC} → ${AGENT_HOME#"$HOME"/}/opencode/opencode.json")
 		;;
 	dsh)
-		SUMMARY_LINES+=("  DSH:      ${CYAN}~/.dsh/profiles/web/cordis.patch.yml${NC} (web profile, plugins from dsh/plugins.txt)")
+		SUMMARY_LINES+=("  DSH:      ${CYAN}~/.dsh/profiles/web/cordis.patch.yml${NC} and ${CYAN}~/.dsh/profiles/dsh-tui/cordis.patch.yml${NC} (plugins from dsh/plugins.txt + dsh/plugins-tui.txt)")
 		;;
 	qwen-code)
 		if [ "$_summary_darwin" -eq 1 ]; then
