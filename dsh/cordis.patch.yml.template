@@ -23,3 +23,15 @@
 {{- end }}
 {{- end }}
 {{- end }}
+# An id-targeted override replaces the bundle's whole config block, so every
+# key that must stay active is restated. rulesFile is absolute on purpose: the
+# bundle's default (<cwd>/.dsh/rules.yaml) is per-session project scope, and a
+# relative path would be resolved against the cwd instead of this install's
+# config home.
+- id: permission-rules
+  config:
+    rulesFile: {{ .Env.AGENT_HOME }}/dsh/rules.yaml
+    badFilePolicy: fail
+    maxRules: 256
+    patternMode: glob
+    watch: true
