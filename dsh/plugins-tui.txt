@@ -1,0 +1,24 @@
+# dsh TUI profile — plugin manifest (one npm package id per line), same shape
+# and same `dsh plugin --profile dsh-tui add` lane as dsh/plugins.txt. Adding
+# the first row is also what creates the profile: dsh ships no tui template.
+#
+#   @deepseek-harness-tui/dsh-tui — the TUI surface (third-party; after this
+#                        row, `dsh-tui` and `dsh --profile dsh-tui` are the
+#                        same app)
+#   dsh-permission-rules — declarative permission rules, driven by
+#                        dsh/rules.yaml through cordis.patch.yml
+#   dsh-at-file          — @file mentions in the composer
+#   dsh-notify-me        — notifications on completion / needs-input / approval
+#
+# No @zhengjunyao/dsh-updater here: the TUI has its own /update lane (TUI ->
+# engine -> launcher) and the web profile already carries the updater, so
+# this row would make three drivers of the shared dsh engine.
+#
+# The last three rows also declare a web client contribution
+# (dsh.client.platform = "web"). Their server-side rows do mount on the TUI
+# profile — readable without booting anything: dsh --profile dsh-tui
+# --dump-config
+@deepseek-harness-tui/dsh-tui
+dsh-permission-rules
+dsh-at-file
+dsh-notify-me
