@@ -1,6 +1,5 @@
 # dsh web profile — plugin manifest (one npm package id per line).
-# Every id verified against the npm registry on 2026-10-24; see the
-# research notes atop cordis.patch.yml.template for the sources.
+# The TUI profile's own list is dsh/plugins-tui.txt.
 #
 #   updater            — @zhengjunyao/dsh-updater: tracks dsh releases,
 #                        one-click update with atomic backup and
